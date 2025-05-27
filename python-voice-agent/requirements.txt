@@ -19,7 +19,7 @@ numpy==1.24.3
 scipy==1.11.4
 
 # HTTP Client
-aiohttp==3.9.1
+aiohttp==3.10.0
 httpx==0.25.2
 
 # Environment & Configuration
