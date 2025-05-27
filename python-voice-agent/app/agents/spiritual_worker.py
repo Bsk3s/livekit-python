@@ -12,6 +12,9 @@ import sys
 from typing import Dict, Optional
 from datetime import datetime
 
+# Add the parent directory to Python path for module resolution
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 from livekit.agents import (
     Agent, AgentSession, JobContext, WorkerOptions, cli
 )
@@ -19,13 +22,10 @@ from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from dotenv import load_dotenv
 
-# Add app directory to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from characters.character_factory import CharacterFactory
-from services.deepgram_service import create_deepgram_stt
-from services.llm_service import create_gpt4o_mini
-from services.livekit_deepgram_tts import LiveKitDeepgramTTS
+from app.characters.character_factory import CharacterFactory
+from app.services.deepgram_service import create_deepgram_stt
+from app.services.llm_service import create_gpt4o_mini
+from app.services.livekit_deepgram_tts import LiveKitDeepgramTTS
 
 load_dotenv()
 

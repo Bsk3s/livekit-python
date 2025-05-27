@@ -9,7 +9,6 @@ services:
       pip install -r requirements.txt
     startCommand: |
       cd python-voice-agent &&
-      export PYTHONPATH=/opt/render/project/src/python-voice-agent:$PYTHONPATH &&
       uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: LIVEKIT_URL
@@ -36,7 +35,6 @@ services:
       pip install -r requirements.txt
     startCommand: |
       cd python-voice-agent &&
-      export PYTHONPATH=/opt/render/project/src/python-voice-agent:$PYTHONPATH &&
       python app/agents/spiritual_worker.py
     envVars:
       - key: LIVEKIT_URL
