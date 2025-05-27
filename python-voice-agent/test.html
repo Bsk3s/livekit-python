@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LiveKit Test</title>
+    <script src="https://unpkg.com/livekit-client@1.15.5/dist/livekit-client.umd.js"></script>
+    <style>
+        .error { color: red; }
+        .success { color: green; }
+        .log { 
+            background: #f5f5f5;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>LiveKit Test</h1>
+    <div id="status">Connecting...</div>
+    <div id="participants"></div>
+    <div id="logs" class="log"></div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logsDiv = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.textContent = `[${new Date().toISOString()}] ${message}`;
+            entry.className = type;
+            logsDiv.appendChild(entry);
+            console.log(message);
+        }
+
+        const room = new LivekitClient.Room({
+            adaptiveStream: true,
+            dynacast: true,
+            publishDefaults: {
+                simulcast: true,
+                videoSimulcastLayers: [
+                    { width: 320, height: 180, encoding: { maxBitrate: 150000, maxFramerate: 15 } },
+                    { width: 640, height: 360, encoding: { maxBitrate: 500000, maxFramerate: 30 } },
+                    { width: 1280, height: 720, encoding: { maxBitrate: 1500000, maxFramerate: 30 } },
+                ],
+            },
+        });
+
+        const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBUElqc1haWXNFaGhzOGgiLCJzdWIiOiJ0ZXN0LXVzZXIiLCJleHAiOjE3NDgwMzY3MTMsIm5iZiI6MTc0Nzk1MDMxMywicm9vbSI6InRlc3Qtcm9vbSIsInJvb21fam9pbiI6dHJ1ZSwicm9vbUpvaW4iOnRydWUsImNhbl9wdWJsaXNoIjp0cnVlLCJjYW5QdWJsaXNoIjp0cnVlLCJjYW5fc3Vic2NyaWJlIjp0cnVlLCJjYW5TdWJzY3JpYmUiOnRydWV9.LkruhN3s7CjIFa2JUEyBL7mgzjIMhhBplh4bbMBvOpY";
+        const url = "wss://hb-j73yzwmu.livekit.cloud";
+
+        // Connect to the room
+        log('Attempting to connect to room...');
+        room.connect(url, token)
+            .then(() => {
+                document.getElementById('status').textContent = 'Connected to room!';
+                document.getElementById('status').className = 'success';
+                log('Connected to room: ' + room.name, 'success');
+                
+                // Log room details
+                log('Room details:');
+                log('- Name: ' + room.name);
+                log('- SID: ' + room.sid);
+                log('- Local participant: ' + room.localParticipant.identity);
+            })
+            .catch((error) => {
+                document.getElementById('status').textContent = 'Error connecting: ' + error.message;
+                document.getElementById('status').className = 'error';
+                log('Error connecting to room: ' + error.message, 'error');
+                log('Error details: ' + JSON.stringify(error, null, 2), 'error');
+            });
+
+        // Handle participant events
+        room.on('participantConnected', (participant) => {
+            log('Participant connected: ' + participant.identity, 'success');
+            updateParticipants();
+        });
+
+        room.on('participantDisconnected', (participant) => {
+            log('Participant disconnected: ' + participant.identity);
+            updateParticipants();
+        });
+
+        room.on('trackSubscribed', (track, publication, participant) => {
+            log('Track subscribed: ' + track.kind + ' from ' + participant.identity);
+        });
+
+        room.on('trackUnsubscribed', (track, publication, participant) => {
+            log('Track unsubscribed: ' + track.kind + ' from ' + participant.identity);
+        });
+
+        room.on('disconnected', () => {
+            log('Disconnected from room');
+            document.getElementById('status').textContent = 'Disconnected from room';
+            document.getElementById('status').className = 'error';
+        });
+
+        function updateParticipants() {
+            const participantsDiv = document.getElementById('participants');
+            participantsDiv.innerHTML = '<h2>Participants:</h2>';
+            room.participants.forEach((participant) => {
+                const div = document.createElement('div');
+                div.textContent = `${participant.identity} (${participant.metadata || 'no metadata'})`;
+                participantsDiv.appendChild(div);
+            });
+        }
+    </script>
+</body>
+</html> 
