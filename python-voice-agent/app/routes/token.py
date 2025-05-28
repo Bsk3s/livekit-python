@@ -110,4 +110,40 @@ async def create_token_legacy(request: dict):
         
     except Exception as e:
         logger.error(f"Legacy token creation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Expo app endpoint - matches the format expected by the iOS app
+@router.post("/generate-token")
+async def generate_token_expo(request: dict):
+    """Generate token endpoint for Expo mobile app"""
+    try:
+        # Extract data from the request format sent by the iOS app
+        room = request.get("room", "spiritual-room-adina")
+        identity = request.get("identity", "anonymous")
+        character = request.get("character", "adina")
+        
+        # Validate character
+        if character not in ["adina", "raffa"]:
+            character = "adina"
+        
+        # Convert to spiritual request format
+        spiritual_request = SpiritualTokenRequest(
+            character=character,
+            user_id=identity,
+            user_name=identity,
+            session_duration_minutes=30
+        )
+        
+        response = await create_spiritual_token(spiritual_request)
+        
+        # Return format expected by iOS app
+        return {
+            "token": response.token,
+            "room": response.room_name,
+            "character": response.character,
+            "ws_url": "wss://heavenly-new-livekit.livekit.cloud"  # LiveKit WebSocket URL
+        }
+        
+    except Exception as e:
+        logger.error(f"Expo token generation error: {e}")
         raise HTTPException(status_code=500, detail=str(e)) 
