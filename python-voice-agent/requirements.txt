@@ -4,10 +4,11 @@ uvicorn[standard]>=0.20.0
 pydantic>=2.0.0
 
 # LiveKit SDK and Agents - Let pip resolve compatible versions
-livekit-agents[deepgram,openai,silero]
+livekit-agents[deepgram,openai,silero,turn-detector]
 livekit-plugins-deepgram
 livekit-plugins-openai
 livekit-plugins-silero
+livekit-plugins-turn-detector
 
 # AI Services - Let pip resolve compatible versions
 openai
