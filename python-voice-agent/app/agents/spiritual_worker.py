@@ -47,6 +47,7 @@ except ImportError as e:
 from app.characters.character_factory import CharacterFactory
 from app.services.deepgram_service import create_deepgram_stt
 from app.services.llm_service import create_gpt4o_mini
+from app.services.livekit_deepgram_tts import LiveKitDeepgramTTS
 
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
@@ -117,35 +118,77 @@ class SpiritualAgentWorker:
                 raise
             
             try:
-                # Use simple OpenAI TTS instead of custom Deepgram TTS for stability
-                from livekit.plugins import openai
-                tts_service = openai.TTS(voice="alloy")  # Simple, reliable TTS
-                logger.info("✅ TTS service created (OpenAI)")
+                # Restore advanced Deepgram TTS with character-specific voices
+                deepgram_tts = LiveKitDeepgramTTS()
+                deepgram_tts.set_character(character_name)
+                logger.info(f"✅ TTS service created (Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']})")
             except Exception as e:
-                logger.error(f"❌ Failed to create TTS service: {e}")
-                raise
+                logger.error(f"❌ Failed to create Deepgram TTS service: {e}")
+                # Fallback to OpenAI TTS if Deepgram fails
+                logger.info("🔄 Falling back to OpenAI TTS...")
+                try:
+                    from livekit.plugins import openai
+                    deepgram_tts = openai.TTS(voice="alloy")
+                    logger.info("✅ TTS service created (OpenAI fallback)")
+                except Exception as fallback_e:
+                    logger.error(f"❌ Fallback TTS also failed: {fallback_e}")
+                    raise
             
             logger.info(f"🚀 Services initialized for {character_name}")
-            logger.info(f"   🎤 TTS: OpenAI Alloy")
+            try:
+                # Try to log Deepgram voice model if available
+                if hasattr(deepgram_tts, 'VOICE_CONFIGS') and character_name in deepgram_tts.VOICE_CONFIGS:
+                    logger.info(f"   🎤 TTS: Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']}")
+                else:
+                    logger.info(f"   🎤 TTS: OpenAI (fallback)")
+            except:
+                logger.info(f"   🎤 TTS: Service created")
             logger.info(f"   🎧 STT: Deepgram Nova-3")
             logger.info(f"   🧠 LLM: GPT-4o Mini")
             
-            # Create simplified agent session (remove complex parameters)
+            # Create enhanced agent session with advanced parameters
             try:
                 session = AgentSession(
                     vad=silero.VAD.load(),
                     stt=stt_service,
                     llm=llm_service,
-                    tts=tts_service,
+                    tts=deepgram_tts,
                     # Only include turn_detection if available
                     **({"turn_detection": MultilingualModel()} if TURN_DETECTOR_AVAILABLE else {}),
-                    # Use basic interruption settings
+                    # Restore advanced interruption settings for natural conversation
                     allow_interruptions=True,
+                    min_interruption_duration=0.5,
+                    min_endpointing_delay=0.3,
+                    max_endpointing_delay=2.0,
                 )
-                logger.info("✅ Agent session created")
+                logger.info("✅ Enhanced agent session created with advanced parameters")
             except Exception as e:
-                logger.error(f"❌ Failed to create agent session: {e}")
-                raise
+                logger.error(f"❌ Failed to create enhanced agent session: {e}")
+                # Try with basic parameters if advanced ones fail
+                logger.info("🔄 Falling back to basic agent session...")
+                try:
+                    session = AgentSession(
+                        vad=silero.VAD.load(),
+                        stt=stt_service,
+                        llm=llm_service,
+                        tts=deepgram_tts,
+                        allow_interruptions=True,
+                    )
+                    logger.info("✅ Basic agent session created")
+                except Exception as fallback_e:
+                    logger.error(f"❌ Basic agent session also failed: {fallback_e}")
+                    raise
+            
+            # Restore advanced event handlers for conversation monitoring
+            try:
+                session.on("user_input_transcribed", self._on_user_transcribed)
+                session.on("agent_state_changed", self._on_agent_state_changed)
+                session.on("speech_created", self._on_speech_created)
+                session.on("speech_finished", self._on_speech_finished)
+                logger.info("✅ Advanced event handlers attached")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not attach event handlers: {e}")
+                # Continue without event handlers - not critical
             
             # Create agent with character personality
             try:
@@ -171,14 +214,21 @@ class SpiritualAgentWorker:
                 logger.error(f"❌ Failed to start session: {e}")
                 raise
             
-            # Generate welcome greeting (simplified)
+            # Generate advanced character-specific greeting
             try:
-                greeting = f"Hello! I'm {character.name}, and I'm here to provide spiritual guidance and support. How can I help you today?"
-                await session.generate_reply(instructions=f"Say this greeting warmly: {greeting}")
-                logger.info(f"✅ Welcome greeting sent")
+                greeting = self._get_character_greeting(character_name)
+                await session.generate_reply(instructions=greeting)
+                logger.info(f"✅ Character-specific welcome greeting sent for {character_name}")
             except Exception as e:
-                logger.error(f"❌ Failed to generate greeting: {e}")
-                # Don't raise - greeting failure shouldn't kill the session
+                logger.error(f"❌ Failed to generate character greeting: {e}")
+                # Fallback to simple greeting
+                try:
+                    simple_greeting = f"Hello! I'm {character.name}, and I'm here to provide spiritual guidance and support. How can I help you today?"
+                    await session.generate_reply(instructions=f"Say this greeting warmly: {simple_greeting}")
+                    logger.info(f"✅ Simple fallback greeting sent")
+                except Exception as fallback_e:
+                    logger.error(f"❌ Even simple greeting failed: {fallback_e}")
+                    # Don't raise - greeting failure shouldn't kill the session
             
             logger.info(f"🎉 {character_name.title()} session started successfully")
             
@@ -192,6 +242,14 @@ class SpiritualAgentWorker:
             # Cleanup
             if 'room_name' in locals() and room_name in self.active_sessions:
                 del self.active_sessions[room_name]
+            
+            # Cleanup TTS service if it's Deepgram
+            if 'deepgram_tts' in locals() and hasattr(deepgram_tts, 'aclose'):
+                try:
+                    await deepgram_tts.aclose()
+                    logger.info("🧹 Deepgram TTS service closed")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error closing TTS service: {e}")
             
             logger.info(f"🧹 Cleaned up session for room {locals().get('room_name', 'unknown')}")
     
@@ -228,6 +286,23 @@ class SpiritualAgentWorker:
         }
         
         return greetings.get(character, greetings["adina"])
+    
+    def _on_user_transcribed(self, event):
+        """Handle user speech transcription"""
+        if event.is_final:
+            logger.info(f"👤 User: '{event.transcript}'")
+    
+    def _on_agent_state_changed(self, event):
+        """Handle agent state changes"""
+        logger.info(f"🤖 Agent state: {event.old_state} → {event.new_state}")
+    
+    def _on_speech_created(self, event):
+        """Handle speech creation"""
+        logger.debug(f"🗣️ Speech created: {event.source}")
+    
+    def _on_speech_finished(self, event):
+        """Handle speech completion"""
+        logger.info(f"✅ Speech finished: interrupted={event.interrupted}")
     
     def setup_signal_handlers(self):
         """Setup graceful shutdown handlers"""
@@ -269,7 +344,7 @@ def main():
         # Start the agent worker
         cli.run_app(worker_options)
     except KeyboardInterrupt:
-        logger.info("🛑 Shutdown requested by user")
+        logger.info("👋 Shutdown requested by user")
     except Exception as e:
         logger.error(f"💥 Worker crashed: {e}")
         logger.error(f"💥 Error type: {type(e).__name__}")
