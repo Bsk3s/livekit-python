@@ -80,19 +80,28 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        # Monitor both processes
+        # Monitor both processes - but prioritize keeping the Token API alive
         while True:
             if not api_process.is_alive():
-                print("❌ Token API process died!")
+                print("❌ Token API process died! This is critical - shutting down.")
                 worker_process.terminate()
                 sys.exit(1)
             
             if not worker_process.is_alive():
-                print("❌ Agent Worker process died!")
-                api_process.terminate()
-                sys.exit(1)
+                print("⚠️ Agent Worker process died! Token API continues running.")
+                print("📱 iOS app can still connect and get tokens.")
+                print("🔄 Agent Worker will restart when users join rooms.")
+                # Don't kill the API - just log and continue
+                break  # Exit monitoring loop but keep API running
             
             time.sleep(5)  # Check every 5 seconds
+        
+        # If we get here, worker died but API is still running
+        print("✅ Token API continues running independently")
+        
+        # Keep the main process alive to maintain the API
+        while api_process.is_alive():
+            time.sleep(10)
             
     except KeyboardInterrupt:
         signal_handler(signal.SIGINT, None)
