@@ -244,11 +244,6 @@ def main():
     # Configure worker options for production
     worker_options = WorkerOptions(
         entrypoint_fnc=entrypoint,
-        # Production optimizations
-        max_retry_count=3,
-        retry_interval=5.0,
-        # Resource limits
-        max_concurrent_jobs=10,  # Adjust based on server capacity
     )
     
     try:
