@@ -141,7 +141,7 @@ async def generate_token_expo(request: dict):
             "token": response.token,
             "room": response.room_name,
             "character": response.character,
-            "ws_url": "wss://heavenly-new-livekit.livekit.cloud"  # LiveKit WebSocket URL
+            "ws_url": "wss://hb-j73yzwmu.livekit.cloud"  # Correct LiveKit WebSocket URL
         }
         
     except Exception as e:
