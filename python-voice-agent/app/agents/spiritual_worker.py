@@ -47,7 +47,6 @@ except ImportError as e:
 from app.characters.character_factory import CharacterFactory
 from app.services.deepgram_service import create_deepgram_stt
 from app.services.llm_service import create_gpt4o_mini
-from app.services.livekit_deepgram_tts import LiveKitDeepgramTTS
 
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
@@ -102,42 +101,62 @@ class SpiritualAgentWorker:
             # Create character instance
             character = CharacterFactory.create_character(character_name)
             
-            # Create optimized services
-            deepgram_tts = LiveKitDeepgramTTS()
-            deepgram_tts.set_character(character_name)
+            # Create basic services (simplified for stability)
+            try:
+                stt_service = create_deepgram_stt()
+                logger.info("✅ STT service created")
+            except Exception as e:
+                logger.error(f"❌ Failed to create STT service: {e}")
+                raise
             
-            stt_service = create_deepgram_stt()
-            llm_service = create_gpt4o_mini()
+            try:
+                llm_service = create_gpt4o_mini()
+                logger.info("✅ LLM service created")
+            except Exception as e:
+                logger.error(f"❌ Failed to create LLM service: {e}")
+                raise
+            
+            try:
+                # Use simple OpenAI TTS instead of custom Deepgram TTS for stability
+                from livekit.plugins import openai
+                tts_service = openai.TTS(voice="alloy")  # Simple, reliable TTS
+                logger.info("✅ TTS service created (OpenAI)")
+            except Exception as e:
+                logger.error(f"❌ Failed to create TTS service: {e}")
+                raise
             
             logger.info(f"🚀 Services initialized for {character_name}")
-            logger.info(f"   🎤 TTS: Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']}")
+            logger.info(f"   🎤 TTS: OpenAI Alloy")
             logger.info(f"   🎧 STT: Deepgram Nova-3")
             logger.info(f"   🧠 LLM: GPT-4o Mini")
             
-            # Create enhanced agent session
-            session = AgentSession(
-                vad=silero.VAD.load(),
-                stt=stt_service,
-                llm=llm_service,
-                tts=deepgram_tts,
-                turn_detection=MultilingualModel() if TURN_DETECTOR_AVAILABLE else None,
-                allow_interruptions=True,
-                min_interruption_duration=0.5,
-                min_endpointing_delay=0.3,
-                max_endpointing_delay=2.0,
-            )
-            
-            # Set up event handlers
-            session.on("user_input_transcribed", self._on_user_transcribed)
-            session.on("agent_state_changed", self._on_agent_state_changed)
-            session.on("speech_created", self._on_speech_created)
-            session.on("speech_finished", self._on_speech_finished)
+            # Create simplified agent session (remove complex parameters)
+            try:
+                session = AgentSession(
+                    vad=silero.VAD.load(),
+                    stt=stt_service,
+                    llm=llm_service,
+                    tts=tts_service,
+                    # Only include turn_detection if available
+                    **({"turn_detection": MultilingualModel()} if TURN_DETECTOR_AVAILABLE else {}),
+                    # Use basic interruption settings
+                    allow_interruptions=True,
+                )
+                logger.info("✅ Agent session created")
+            except Exception as e:
+                logger.error(f"❌ Failed to create agent session: {e}")
+                raise
             
             # Create agent with character personality
-            agent = Agent(
-                name=character.name,
-                instructions=character.personality,
-            )
+            try:
+                agent = Agent(
+                    name=character.name,
+                    instructions=character.personality,
+                )
+                logger.info(f"✅ Agent created for {character.name}")
+            except Exception as e:
+                logger.error(f"❌ Failed to create agent: {e}")
+                raise
             
             # Track active session
             self.active_sessions[room_name] = session
@@ -145,26 +164,36 @@ class SpiritualAgentWorker:
             logger.info(f"✨ {character_name.title()} is ready for spiritual guidance in {room_name}")
             
             # Start the session
-            await session.start(agent=agent, room=ctx.room)
+            try:
+                await session.start(agent=agent, room=ctx.room)
+                logger.info(f"✅ Session started for {character_name}")
+            except Exception as e:
+                logger.error(f"❌ Failed to start session: {e}")
+                raise
             
-            # Generate welcome greeting
-            greeting = self._get_character_greeting(character_name)
-            await session.generate_reply(instructions=greeting)
+            # Generate welcome greeting (simplified)
+            try:
+                greeting = f"Hello! I'm {character.name}, and I'm here to provide spiritual guidance and support. How can I help you today?"
+                await session.generate_reply(instructions=f"Say this greeting warmly: {greeting}")
+                logger.info(f"✅ Welcome greeting sent")
+            except Exception as e:
+                logger.error(f"❌ Failed to generate greeting: {e}")
+                # Don't raise - greeting failure shouldn't kill the session
             
             logger.info(f"🎉 {character_name.title()} session started successfully")
             
         except Exception as e:
             logger.error(f"❌ Error in spiritual agent session: {e}")
+            logger.error(f"❌ Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
             raise
         finally:
             # Cleanup
-            if room_name in self.active_sessions:
+            if 'room_name' in locals() and room_name in self.active_sessions:
                 del self.active_sessions[room_name]
             
-            if 'deepgram_tts' in locals():
-                await deepgram_tts.aclose()
-            
-            logger.info(f"🧹 Cleaned up session for room {room_name}")
+            logger.info(f"🧹 Cleaned up session for room {locals().get('room_name', 'unknown')}")
     
     def _extract_character_from_room(self, room_name: str) -> Optional[str]:
         """Extract character name from room name (spiritual-{character}-{session_id})"""
@@ -200,23 +229,6 @@ class SpiritualAgentWorker:
         
         return greetings.get(character, greetings["adina"])
     
-    def _on_user_transcribed(self, event):
-        """Handle user speech transcription"""
-        if event.is_final:
-            logger.info(f"👤 User: '{event.transcript}'")
-    
-    def _on_agent_state_changed(self, event):
-        """Handle agent state changes"""
-        logger.info(f"🤖 Agent state: {event.old_state} → {event.new_state}")
-    
-    def _on_speech_created(self, event):
-        """Handle speech creation"""
-        logger.debug(f"🗣️ Speech created: {event.source}")
-    
-    def _on_speech_finished(self, event):
-        """Handle speech completion"""
-        logger.info(f"✅ Speech finished: interrupted={event.interrupted}")
-    
     def setup_signal_handlers(self):
         """Setup graceful shutdown handlers"""
         def signal_handler(signum, frame):
@@ -241,18 +253,28 @@ def main():
     # Setup signal handlers for graceful shutdown
     spiritual_worker.setup_signal_handlers()
     
-    # Configure worker options for production
+    # Configure worker options for production with proper settings
     worker_options = WorkerOptions(
         entrypoint_fnc=entrypoint,
+        # Set a reasonable load threshold (default is 0.75)
+        load_threshold=0.8,
+        # Allow time for graceful shutdown (30 minutes default)
+        drain_timeout=1800,  # 30 minutes in seconds
+        # Set worker permissions
+        permissions=None,  # Use defaults: can publish, subscribe, publish data
     )
     
     try:
+        logger.info("🚀 Starting LiveKit Agent Worker...")
         # Start the agent worker
         cli.run_app(worker_options)
     except KeyboardInterrupt:
         logger.info("🛑 Shutdown requested by user")
     except Exception as e:
         logger.error(f"💥 Worker crashed: {e}")
+        logger.error(f"💥 Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"💥 Traceback: {traceback.format_exc()}")
         sys.exit(1)
     finally:
         logger.info("👋 Spiritual Agent Worker shutdown complete")
