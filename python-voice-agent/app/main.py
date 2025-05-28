@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import logging
+from contextlib import asynccontextmanager
 from app.routes import token
 
 # Configure logging for production
@@ -16,10 +17,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("🌟 Spiritual Guidance API starting up")
+    logger.info(f"🔗 Environment: {os.getenv('ENVIRONMENT', 'development')}")
+    logger.info(f"🎭 Available characters: Adina (compassionate), Raffa (wise)")
+    yield
+    # Shutdown
+    logger.info("👋 Spiritual Guidance API shutting down")
+
 app = FastAPI(
     title="Spiritual Guidance Voice Agent API",
     description="Production API for LiveKit spiritual guidance voice agent with Adina and Raffa characters",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Configure CORS for production
@@ -67,18 +79,6 @@ async def root():
 
 # Include routers
 app.include_router(token.router, prefix="/api", tags=["Authentication"])
-
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    logger.info("🌟 Spiritual Guidance API starting up")
-    logger.info(f"🔗 Environment: {os.getenv('ENVIRONMENT', 'development')}")
-    logger.info(f"🎭 Available characters: Adina (compassionate), Raffa (wise)")
-
-# Shutdown event
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("👋 Spiritual Guidance API shutting down")
 
 if __name__ == "__main__":
     import uvicorn
