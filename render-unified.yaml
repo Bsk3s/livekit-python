@@ -4,9 +4,10 @@ services:
     name: spiritual-unified-service
     env: python
     buildCommand: |
+      cd python-voice-agent &&
       pip install --upgrade pip &&
-      pip install -r python-voice-agent/requirements.txt
-    startCommand: python start_unified_service.py
+      pip install -r requirements.txt
+    startCommand: cd python-voice-agent && python start_unified_service.py
     envVars:
       - key: LIVEKIT_URL
         sync: false
