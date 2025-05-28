@@ -272,3 +272,60 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ---
 
 **🌟 Built with love for spiritual guidance and human connection 🌟** 
+
+## ✅ **Working Start Commands (Try These):**
+
+### **Option 1: Direct Python Execution (Recommended)**
+```bash
+cd python-voice-agent && python app/main.py
+```
+
+### **Option 2: Python Module with Full Path**
+```bash
+cd python-voice-agent && python -m app.main
+```
+
+### **Option 3: If Root Directory is Set to `python-voice-agent`**
+```bash
+python app/main.py
+```
+
+### **Option 4: Uvicorn with Module Path**
+```bash
+cd python-voice-agent && python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+## 🎯 **Why These Work:**
+
+Your `main.py` file has this at the bottom:
+```python
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=int(os.getenv("PORT", 8000)),
+        log_level="info"
+    )
+```
+
+This means you can run it directly with `python app/main.py` and it will start the uvicorn server automatically!
+
+## 🔧 **Recommended Configuration:**
+
+```yaml
+Root Directory: python-voice-agent
+Build Command: pip install -r requirements.txt
+Start Command: python app/main.py
+```
+
+## 🚀 **This Should Work Because:**
+
+1. ✅ Your FastAPI app is properly configured
+2. ✅ It has the uvicorn runner built-in
+3. ✅ It reads the PORT environment variable
+4. ✅ It binds to 0.0.0.0 (required for Render)
+
+Try **Option 1** first: `cd python-voice-agent && python app/main.py`
+
+This should start your Heavenly Hub Voice Agent API successfully! Let me know if this works or if you get any specific error messages. 
