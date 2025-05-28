@@ -8,7 +8,16 @@ from livekit.agents import (
     cli
 )
 from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+# Try to import turn detector, but make it optional
+try:
+    from livekit.plugins.turn_detector.multilingual import MultilingualModel
+    TURN_DETECTOR_AVAILABLE = True
+except ImportError as e:
+    TURN_DETECTOR_AVAILABLE = False
+    print(f"⚠️ Turn detector plugin not available: {e}")
+    print("🔄 Agent will use standard VAD-based turn detection")
+
 import os
 from services.livekit_tts_adapter import LiveKitGeminiTTSAdapter
 
@@ -31,7 +40,7 @@ async def entrypoint(ctx: JobContext):
         stt=create_deepgram_stt(),
         llm=create_gpt4o_mini(),
         tts=tts_adapter,
-        turn_detection=MultilingualModel(),
+        turn_detection=MultilingualModel() if TURN_DETECTOR_AVAILABLE else None,
     )
     await session.start(agent=agent, room=ctx.room)
     await session.generate_reply(

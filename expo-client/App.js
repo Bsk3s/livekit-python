@@ -116,31 +116,48 @@ export default function App() {
       
     } catch (error) {
       console.error('Failed to connect:', error);
-      Alert.alert('Connection Error', 'Failed to connect to spiritual guidance session');
+      Alert.alert('Connection Error', 'Failed to connect to spiritual guidance session. Please check your internet connection and try again.');
       setIsConnecting(false);
     }
   };
 
   const generateToken = async (character) => {
-    // Replace localhost with your computer's IP address for mobile testing
-    const response = await fetch('http://192.168.1.100:8000/api/generate-token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        room: `spiritual-room-${character}`,
-        identity: `user-${Date.now()}`,
-        character: character,
-      }),
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Token generation failed: ${response.status}`);
+    try {
+      // Use production backend URL for iOS builds to avoid ATS issues
+      const baseUrl = 'https://heavenly-new.onrender.com'; // Always use production for iOS
+      
+      console.log(`Generating token for ${character} using ${baseUrl}`);
+      
+      const response = await fetch(`${baseUrl}/api/generate-token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          room: `spiritual-room-${character}`,
+          identity: `user-${Date.now()}`,
+          character: character,
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Token generation failed: ${response.status} - ${errorText}`);
+      }
+      
+      const data = await response.json();
+      console.log('Token generated successfully:', { 
+        room: data.room, 
+        character: data.character,
+        hasToken: !!data.token,
+        wsUrl: data.ws_url
+      });
+      
+      return data; // Returns { token, room, character, ws_url }
+    } catch (error) {
+      console.error('Token generation error:', error);
+      throw error;
     }
-    
-    const data = await response.json();
-    return data; // Returns { token, room, character, ws_url }
   };
 
   const disconnect = () => {
@@ -189,6 +206,7 @@ export default function App() {
           <View style={styles.header}>
             <Text style={styles.title}>Heavenly Hub</Text>
             <Text style={styles.subtitle}>Spiritual Voice Guidance</Text>
+            <Text style={styles.buildInfo}>Ultra-Advanced Voice Agent - LiveKit Integration</Text>
           </View>
 
           {/* Character Selection */}
@@ -261,7 +279,7 @@ export default function App() {
 
             <Text style={styles.voiceStatus}>
               {isConnecting
-                ? 'Connecting...'
+                ? 'Connecting to spiritual guidance...'
                 : isConnected
                 ? isSpeaking
                   ? `${currentCharacter.name} is speaking...`
@@ -279,7 +297,7 @@ export default function App() {
                 color={isConnected ? '#4CAF50' : '#999'}
               />
               <Text style={styles.statusText}>
-                {isConnected ? 'Connected' : 'Disconnected'}
+                {isConnected ? 'Connected - Voice Agent Active' : 'Ready to Connect'}
               </Text>
             </View>
           </View>
@@ -313,6 +331,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: 'rgba(255,255,255,0.9)',
     marginTop: 5,
+  },
+  buildInfo: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.8)',
+    marginTop: 10,
+    fontStyle: 'italic',
   },
   characterSection: {
     marginVertical: 20,

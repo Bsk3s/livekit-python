@@ -1,175 +1,313 @@
-# Heavenly Hub Voice Agent - Expo Client
+# 🚀 Heavenly Hub Voice Agent - EAS Mobile App
 
-A beautiful React Native client for testing your spiritual voice agent with real mobile devices.
+## 🎯 Overview
 
-## Features
+This is an **ULTRA-ADVANCED** React Native mobile app built with Expo EAS Build that connects to our spiritual voice agent featuring:
 
-- 🎤 **Real Voice Testing**: Test actual voice input/output on mobile devices
-- 👥 **Character Selection**: Choose between Adina (compassionate guide) and Raffa (wise mentor)
-- 🎨 **Beautiful UI**: Modern gradient design with character-specific themes
-- 📱 **Cross-Platform**: Works on iOS, Android, and web
-- 🔊 **Audio Permissions**: Automatic microphone and audio setup
-- 📡 **LiveKit Integration**: Direct connection to your voice agent backend
+- **Sub-300ms TTS Latency** with Deepgram Aura-2 voices
+- **Background Voice Cancellation (BVC)** for noise removal  
+- **Multilingual Turn Detection** for natural conversations
+- **Character-Specific Voices**: Adina (gentle) and Raffa (wise)
+- **Production-Ready Deployment** with automatic backend switching
 
-## Quick Start
+## 🏗️ EAS Build Setup
 
-### 1. Install Dependencies
+### Prerequisites
+- Node.js 18+ installed
+- Expo account (create at [expo.dev](https://expo.dev))
+- iOS device (for iOS testing) or Android device (for Android testing)
+- Stable internet connection
 
+### 1. Quick Setup
 ```bash
+# Navigate to expo-client directory
 cd expo-client
-npm install
+
+# Install dependencies
+npm install --legacy-peer-deps
+
+# Install EAS CLI globally
+npm install -g eas-cli@latest
+
+# Login to Expo
+npx expo login
+
+# Initialize EAS project
+eas init
 ```
 
-### 2. Install Expo CLI (if not already installed)
+### 2. Build Options
 
+#### 🔧 Development Build (Recommended)
+Best for testing all features including LiveKit voice agent:
 ```bash
-npm install -g @expo/cli
+npm run build:dev
 ```
+- Choose iOS or Android when prompted
+- Supports all native features
+- Includes debugging capabilities
+- Hot reloading enabled
 
-### 3. Update Configuration
-
-Edit `App.js` and update the server URL:
-
-```javascript
-// Replace this line in the generateToken function:
-const response = await fetch('http://localhost:8000/api/generate-token', {
-// With your actual server URL:
-const response = await fetch('http://YOUR_SERVER_IP:8000/api/generate-token', {
-```
-
-**Important**: Use your computer's IP address, not `localhost`, so your mobile device can reach the server.
-
-### 4. Start Your Backend
-
-Make sure your Python voice agent is running:
-
+#### 🏭 Preview Build
+Production-like standalone app:
 ```bash
-cd ../python-voice-agent
-source venv311/bin/activate
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+npm run build:preview
 ```
+- No Expo Go required
+- Production environment
+- Faster than development build
 
-### 5. Start LiveKit Agent
-
-In another terminal:
-
+#### 🚀 Production Build
+App store ready:
 ```bash
-cd python-voice-agent
-source venv311/bin/activate
-python app/agents/spiritual_session.py dev
+npm run build:production
 ```
+- Optimized for distribution
+- Ready for App Store/Play Store
 
-### 6. Start Expo Development Server
+### 3. Installation & Testing
 
+1. **Wait for Build**: EAS will provide a URL when build completes (10-20 minutes)
+2. **Download**: Get the APK (Android) or IPA (iOS) from the provided URL
+3. **Install**: 
+   - Android: Enable "Unknown Sources" and install APK
+   - iOS: Use TestFlight or install via Xcode/Apple Configurator
+4. **Test**: Launch app and test voice conversations!
+
+## 🎭 App Features
+
+### Character Selection
+- **Adina**: Compassionate female guide with gentle voice (aura-2-luna-en)
+- **Raffa**: Wise male mentor with warm voice (aura-2-orion-en)
+
+### Voice Interface
+- **Tap to Connect**: Connects to selected character
+- **Real-time Voice**: Full-duplex voice conversation
+- **Visual Feedback**: Pulsing animation when agent speaks
+- **Smart Interruption**: Can interrupt agent mid-speech
+
+### Technical Features
+- **Automatic Backend Detection**: Switches between local/production
+- **Token-Based Authentication**: Secure LiveKit room access
+- **Real-time Audio Processing**: Low-latency voice pipeline
+- **Background Voice Cancellation**: Removes environmental noise
+
+## 🌐 Backend Configuration
+
+### Automatic Environment Detection
+The app automatically detects the environment:
+
+- **Development** (`__DEV__ = true`): Uses local backend
+  - Default: `http://192.168.1.100:8000`
+  - Update IP in `App.js` for your local setup
+
+- **Production** (`__DEV__ = false`): Uses production backend
+  - URL: `https://heavenly-new.onrender.com`
+  - Fully deployed on Render
+
+### Local Backend Setup (Optional)
+If testing with local backend:
+
+1. **Find Your IP Address**:
+   - Windows: `ipconfig`
+   - Mac/Linux: `ifconfig`
+
+2. **Update App.js**:
+   ```javascript
+   const baseUrl = __DEV__ 
+     ? 'http://YOUR_IP_ADDRESS:8000' // Replace with your IP
+     : 'https://heavenly-new.onrender.com';
+   ```
+
+3. **Start Local Backend**:
+   ```bash
+   cd ../python-voice-agent
+   python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+   ```
+
+## 🧪 Testing Guide
+
+### Pre-Testing Checklist
+- [ ] EAS build completed and installed
+- [ ] Device microphone permissions granted
+- [ ] Stable internet connection (WiFi recommended)
+- [ ] Backend health verified (if using production)
+
+### Backend Health Check
 ```bash
-npm start
+# Test production backend
+curl https://heavenly-new.onrender.com/health
+
+# Expected response:
+{
+  "status": "healthy",
+  "service": "Heavenly Hub Voice Agent API",
+  "version": "1.0.0",
+  "timestamp": "2024-..."
+}
 ```
 
-### 7. Test on Device
+### Voice Testing Scenarios
 
-- **iOS**: Scan QR code with Camera app
-- **Android**: Scan QR code with Expo Go app
-- **Web**: Press 'w' in terminal
+#### Basic Functionality Test
+1. Launch app
+2. Select character (Adina or Raffa)
+3. Tap "Connect" button
+4. Say: "Hello, I need spiritual guidance"
+5. Verify: Agent responds with character voice
 
-## Environment Setup
+#### Advanced Features Test
+1. **Interruption**: Interrupt agent mid-sentence
+2. **Background Noise**: Test with music/TV playing
+3. **Extended Conversation**: 5+ minute conversation
+4. **Character Switching**: Test both Adina and Raffa
+5. **Context Memory**: Reference earlier conversation topics
 
-### Backend Environment Variables
+### Performance Benchmarks
+Target metrics to verify:
+- **Response Latency**: <500ms voice-to-voice
+- **Audio Quality**: Clear, natural voices
+- **Connection Stability**: No drops during conversation
+- **Interruption Speed**: <400ms response to interruption
 
-Make sure your `python-voice-agent/.env` includes:
+## 🔧 Troubleshooting
 
-```env
-# LiveKit Configuration
-LIVEKIT_API_KEY=your_livekit_api_key
-LIVEKIT_API_SECRET=your_livekit_api_secret
-LIVEKIT_WS_URL=ws://YOUR_SERVER_IP:7880
+### Common Issues
 
-# Voice Services
-DEEPGRAM_API_KEY=your_deepgram_key
-OPENAI_API_KEY=your_openai_key
-```
+#### "Failed to connect to room"
+- **Check internet connection**
+- **Verify backend health**: Visit production health endpoint
+- **Try switching WiFi/cellular**
+- **Wait if backend is starting up** (Render free tier sleeps)
 
-### Finding Your Server IP
+#### "No audio input/output"
+- **Check microphone permissions** in device settings
+- **Restart the app**
+- **Test device audio** with other apps
+- **Ensure volume is up**
 
-**macOS/Linux**:
-```bash
-ifconfig | grep "inet " | grep -v 127.0.0.1
-```
+#### "Token generation failed"
+- **Backend server might be sleeping** (wait 30 seconds)
+- **Try different character** (Adina/Raffa)
+- **Check device network settings**
+- **Verify backend URL in logs**
 
-**Windows**:
-```cmd
-ipconfig
-```
-
-Look for your local network IP (usually starts with 192.168.x.x or 10.x.x.x).
-
-## Testing Flow
-
-1. **Select Character**: Choose Adina or Raffa
-2. **Connect**: Tap the microphone button to connect
-3. **Speak**: Talk naturally to your spiritual guide
-4. **Listen**: Hear responses with character-specific voices
-5. **Interrupt**: Test interruption by speaking while the agent is talking
-
-## Character Voices
-
-- **Adina**: Luna voice (gentle, soothing female)
-- **Raffa**: Orion voice (warm, approachable male)
-
-## Troubleshooting
-
-### Connection Issues
-
-1. **Check Network**: Ensure phone and computer are on same WiFi
-2. **Check IP**: Use actual IP address, not localhost
-3. **Check Ports**: Ensure ports 8000 and 7880 are accessible
-4. **Check Backend**: Verify FastAPI server is running on 0.0.0.0:8000
-
-### Audio Issues
-
-1. **Permissions**: Grant microphone permissions when prompted
-2. **Audio Mode**: App automatically configures audio for voice calls
-3. **Volume**: Ensure device volume is up
-4. **Headphones**: Test with and without headphones
+#### "App won't install"
+- **Android**: Enable "Unknown Sources" in security settings
+- **iOS**: Install via TestFlight or developer certificate
+- **Check device compatibility** (Android 10+/iOS 15+)
 
 ### Performance Issues
+- **Use WiFi instead of cellular** for best quality
+- **Close other audio apps** during testing
+- **Ensure device battery >20%**
+- **Test in quiet environment first**
 
-1. **Network**: Use strong WiFi connection
-2. **Device**: Close other apps for better performance
-3. **Background**: Keep app in foreground during testing
+### Debugging
+```bash
+# View app logs
+npx expo logs
 
-## Development
+# Test backend connectivity
+node test_backend.js
 
-### Adding New Characters
+# Check build status
+eas build:list
+```
 
-1. Update `characters` object in `App.js`
-2. Add character configuration in backend
-3. Update voice models in Deepgram TTS service
+## 📊 Build Configurations
 
-### Customizing UI
+### Development Profile
+```json
+{
+  "developmentClient": true,
+  "distribution": "internal",
+  "ios": { "resourceClass": "m-medium" },
+  "android": { "gradleCommand": ":app:assembleDebug" }
+}
+```
 
-- Modify gradient colors in character definitions
-- Update styles in `StyleSheet.create()`
-- Add new animations or visual feedback
+### Preview Profile
+```json
+{
+  "distribution": "internal",
+  "ios": { "resourceClass": "m-medium" },
+  "android": { "buildType": "apk" }
+}
+```
 
-### Testing Features
+### Production Profile
+```json
+{
+  "ios": { "resourceClass": "m-medium" },
+  "android": { "resourceClass": "medium" }
+}
+```
 
-- **Voice Activity**: Visual feedback when speaking/listening
-- **Connection Status**: Real-time connection indicators
-- **Character Switching**: Test different personalities
-- **Interruption**: Natural conversation flow
+## 🎯 Success Criteria
 
-## Production Considerations
+Your EAS app is successfully working when:
 
-1. **Security**: Implement proper token validation
-2. **CORS**: Restrict origins to your app's domain
-3. **Rate Limiting**: Add API rate limiting
-4. **Error Handling**: Improve error messages and recovery
-5. **Analytics**: Add usage tracking and performance monitoring
+✅ **Installation**
+- App installs without errors
+- Launches and shows character selection
+- No crash on startup
 
-## Next Steps
+✅ **Connection**
+- Successfully connects to backend
+- Token generation works
+- LiveKit room connection established
 
-- Test voice quality and latency
-- Verify character personalities work correctly
-- Test interruption handling
-- Validate on different devices and network conditions
-- Gather user feedback for improvements 
+✅ **Voice Features**
+- Voice input detected and transcribed
+- Agent responds with character voice
+- Interruption handling works smoothly
+- Background noise effectively reduced
+
+✅ **Performance**
+- Sub-500ms response times
+- Clear audio quality both directions
+- Stable 10+ minute conversations
+- Natural conversation flow
+
+## 🔗 Resources
+
+- **Expo EAS Build**: https://docs.expo.dev/build/
+- **LiveKit React Native**: https://docs.livekit.io/client-sdks/react-native/
+- **Backend API**: https://heavenly-new.onrender.com/
+- **Health Check**: https://heavenly-new.onrender.com/health
+
+## 🚀 Quick Commands
+
+```bash
+# Setup
+npm install --legacy-peer-deps
+npx expo login
+eas init
+
+# Build
+npm run build:dev        # Development build
+npm run build:preview    # Preview build  
+npm run build:production # Production build
+
+# Debug
+npx expo logs           # View logs
+node test_backend.js    # Test backend
+eas build:list         # Check builds
+
+# Development
+npx expo start         # Start dev server
+npx expo start --android  # Android dev
+npx expo start --ios      # iOS dev
+```
+
+## 🎉 Next Steps
+
+1. **Complete EAS Setup**: Follow quick setup instructions
+2. **Build Development App**: `npm run build:dev`
+3. **Install on Device**: Download and install APK/IPA
+4. **Test Voice Agent**: Have conversations with Adina and Raffa
+5. **Verify Performance**: Check sub-300ms response times
+6. **Report Issues**: Document any problems for improvement
+
+**Ready to test the highest-level voice agent technology! 🚀** 

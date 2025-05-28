@@ -19,8 +19,17 @@ from livekit.agents import (
     Agent, AgentSession, JobContext, WorkerOptions, cli
 )
 from livekit.plugins import deepgram, openai, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from dotenv import load_dotenv
+
+# Try to import turn detector, but make it optional
+try:
+    from livekit.plugins.turn_detector.multilingual import MultilingualModel
+    TURN_DETECTOR_AVAILABLE = True
+    logger.info("✅ Turn detector plugin available")
+except ImportError as e:
+    TURN_DETECTOR_AVAILABLE = False
+    logger.warning(f"⚠️ Turn detector plugin not available: {e}")
+    logger.info("🔄 Agent will use standard VAD-based turn detection")
 
 from app.characters.character_factory import CharacterFactory
 from app.services.deepgram_service import DeepgramSTTService
@@ -111,7 +120,7 @@ class SpiritualAgentWorker:
                 stt=stt_service,
                 llm=llm_service,
                 tts=deepgram_tts,
-                turn_detection=MultilingualModel(),
+                turn_detection=MultilingualModel() if TURN_DETECTOR_AVAILABLE else None,
                 allow_interruptions=True,
                 min_interruption_duration=0.5,
                 min_endpointing_delay=0.3,
