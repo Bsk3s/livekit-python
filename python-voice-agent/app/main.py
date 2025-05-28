@@ -8,14 +8,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import logging
 from contextlib import asynccontextmanager
-from app.routes import token
 
-# Configure logging for production
+# Configure logging for production FIRST
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Now import routes after logging is configured
+from app.routes import token
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

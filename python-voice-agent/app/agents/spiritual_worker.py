@@ -21,6 +21,19 @@ from livekit.agents import (
 from livekit.plugins import deepgram, openai, silero
 from dotenv import load_dotenv
 
+load_dotenv()
+
+# Configure production logging FIRST
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('spiritual_agent.log') if not os.getenv('RENDER') else logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Try to import turn detector, but make it optional
 try:
     from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -35,19 +48,6 @@ from app.characters.character_factory import CharacterFactory
 from app.services.deepgram_service import DeepgramSTTService
 from app.services.llm_service import LLMService
 from app.services.livekit_deepgram_tts import LiveKitDeepgramTTS
-
-load_dotenv()
-
-# Configure production logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('spiritual_agent.log') if not os.getenv('RENDER') else logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
 
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
