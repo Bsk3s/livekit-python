@@ -46,8 +46,20 @@ def start_agent_worker():
         # Small delay to let the API start first
         time.sleep(2)
         
-        from app.agents.spiritual_worker import main
-        main()
+        # Import the CLI and run in development mode
+        import subprocess
+        import sys
+        
+        # Run the spiritual worker in development mode
+        result = subprocess.run([
+            sys.executable, 
+            "app/agents/spiritual_worker.py", 
+            "dev"
+        ], cwd=current_dir)
+        
+        if result.returncode != 0:
+            print(f"❌ Agent worker exited with code {result.returncode}")
+        
     except Exception as e:
         print(f"❌ Agent Worker failed to start: {e}")
         sys.exit(1)
