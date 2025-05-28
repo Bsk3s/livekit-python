@@ -1,0 +1,30 @@
+services:
+  # Unified Spiritual Guidance Service - Token API + Agent Worker together
+  - type: web
+    name: spiritual-unified-service
+    env: python
+    buildCommand: |
+      pip install --upgrade pip &&
+      pip install -r python-voice-agent/requirements.txt
+    startCommand: python start_unified_service.py
+    envVars:
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: RENDER
+        value: "true"
+    healthCheckPath: /health
+    # Web service settings
+    autoDeploy: true
+    plan: starter
+    # Note: This runs both API and worker in one service
+    # If either fails, the whole service fails (as requested) 
