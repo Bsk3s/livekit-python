@@ -45,8 +45,8 @@ except ImportError as e:
     logger.info("🔄 Agent will use standard VAD-based turn detection")
 
 from app.characters.character_factory import CharacterFactory
-from app.services.deepgram_service import DeepgramSTTService
-from app.services.llm_service import LLMService
+from app.services.deepgram_service import create_deepgram_stt
+from app.services.llm_service import create_gpt4o_mini
 from app.services.livekit_deepgram_tts import LiveKitDeepgramTTS
 
 class SpiritualAgentWorker:
@@ -106,8 +106,8 @@ class SpiritualAgentWorker:
             deepgram_tts = LiveKitDeepgramTTS()
             deepgram_tts.set_character(character_name)
             
-            stt_service = DeepgramSTTService()
-            llm_service = LLMService()
+            stt_service = create_deepgram_stt()
+            llm_service = create_gpt4o_mini()
             
             logger.info(f"🚀 Services initialized for {character_name}")
             logger.info(f"   🎤 TTS: Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']}")
