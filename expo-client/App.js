@@ -13,16 +13,15 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
+import { registerGlobals } from '@livekit/react-native';
 import {
   Room,
-  connect,
   RoomEvent,
-  RemoteParticipant,
-  RemoteTrackPublication,
-  RemoteTrack,
   Track,
-  AudioTrack,
-} from '@livekit/react-native';
+} from 'livekit-client';
+
+// Register LiveKit globals for React Native
+registerGlobals();
 
 const { width, height } = Dimensions.get('window');
 
@@ -111,7 +110,7 @@ export default function App() {
       });
       
       // Connect to room using WebSocket URL from backend
-      await roomInstance.connect(tokenData.ws_url, tokenData.token);
+      await roomInstance.connect(tokenData.wsUrl, tokenData.token);
       setRoom(roomInstance);
       
     } catch (error) {
@@ -150,10 +149,10 @@ export default function App() {
         room: data.room, 
         character: data.character,
         hasToken: !!data.token,
-        wsUrl: data.ws_url
+        wsUrl: data.wsUrl
       });
       
-      return data; // Returns { token, room, character, ws_url }
+      return data; // Returns { token, room, character, wsUrl }
     } catch (error) {
       console.error('Token generation error:', error);
       throw error;
@@ -200,20 +199,19 @@ export default function App() {
       <LinearGradient
         colors={currentCharacter.color}
         style={styles.container}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
       >
         <SafeAreaView style={styles.safeArea}>
-          {/* Header */}
           <View style={styles.header}>
             <Text style={styles.title}>Heavenly Hub</Text>
-            <Text style={styles.subtitle}>Spiritual Voice Guidance</Text>
-            <Text style={styles.buildInfo}>Ultra-Advanced Voice Agent - LiveKit Integration</Text>
+            <Text style={styles.subtitle}>Voice Agent</Text>
           </View>
 
-          {/* Character Selection */}
-          <View style={styles.characterSection}>
+          <View style={styles.characterSelection}>
             <Text style={styles.sectionTitle}>Choose Your Guide</Text>
             <View style={styles.characterButtons}>
-              {Object.entries(characters).map(([key, char]) => (
+              {Object.entries(characters).map(([key, character]) => (
                 <TouchableOpacity
                   key={key}
                   style={[
@@ -221,10 +219,10 @@ export default function App() {
                     selectedCharacter === key && styles.selectedCharacter,
                   ]}
                   onPress={() => setSelectedCharacter(key)}
-                  disabled={isConnected}
+                  disabled={isConnected || isConnecting}
                 >
                   <Ionicons
-                    name={char.icon}
+                    name={character.icon}
                     size={32}
                     color={selectedCharacter === key ? '#fff' : '#666'}
                   />
@@ -234,72 +232,81 @@ export default function App() {
                       selectedCharacter === key && styles.selectedCharacterText,
                     ]}
                   >
-                    {char.name}
+                    {character.name}
                   </Text>
                   <Text
                     style={[
-                      styles.characterDesc,
+                      styles.characterDescription,
                       selectedCharacter === key && styles.selectedCharacterText,
                     ]}
                   >
-                    {char.description}
+                    {character.description}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
 
-          {/* Voice Interface */}
-          <View style={styles.voiceSection}>
+          <View style={styles.connectionSection}>
             <Animated.View
               style={[
-                styles.voiceButton,
-                { transform: [{ scale: pulseAnim }] },
-                isSpeaking && styles.speakingButton,
+                styles.connectionIndicator,
+                {
+                  transform: [{ scale: isSpeaking ? pulseAnim : 1 }],
+                  backgroundColor: isConnected
+                    ? isSpeaking
+                      ? '#4CAF50'
+                      : '#2196F3'
+                    : '#9E9E9E',
+                },
               ]}
             >
-              <TouchableOpacity
-                style={styles.voiceButtonInner}
-                onPress={isConnected ? disconnect : connectToRoom}
-                disabled={isConnecting}
-              >
-                <Ionicons
-                  name={
-                    isConnected
-                      ? 'stop-circle'
-                      : isConnecting
-                      ? 'hourglass'
+              <Ionicons
+                name={
+                  isConnected
+                    ? isSpeaking
+                      ? 'volume-high'
                       : 'mic'
-                  }
-                  size={64}
-                  color="#fff"
-                />
-              </TouchableOpacity>
+                    : 'mic-off'
+                }
+                size={48}
+                color="#fff"
+              />
             </Animated.View>
 
-            <Text style={styles.voiceStatus}>
+            <Text style={styles.statusText}>
               {isConnecting
                 ? 'Connecting to spiritual guidance...'
                 : isConnected
                 ? isSpeaking
                   ? `${currentCharacter.name} is speaking...`
-                  : 'Tap to speak or listen'
-                : `Connect to ${currentCharacter.name}`}
+                  : `Connected to ${currentCharacter.name}`
+                : 'Ready to connect'}
             </Text>
+
+            <TouchableOpacity
+              style={[
+                styles.connectButton,
+                isConnected && styles.disconnectButton,
+                isConnecting && styles.connectingButton,
+              ]}
+              onPress={isConnected ? disconnect : connectToRoom}
+              disabled={isConnecting}
+            >
+              <Text style={styles.connectButtonText}>
+                {isConnecting
+                  ? 'Connecting...'
+                  : isConnected
+                  ? 'End Session'
+                  : 'Begin Spiritual Guidance'}
+              </Text>
+            </TouchableOpacity>
           </View>
 
-          {/* Status */}
-          <View style={styles.statusSection}>
-            <View style={styles.statusItem}>
-              <Ionicons
-                name={isConnected ? 'checkmark-circle' : 'ellipse-outline'}
-                size={20}
-                color={isConnected ? '#4CAF50' : '#999'}
-              />
-              <Text style={styles.statusText}>
-                {isConnected ? 'Connected - Voice Agent Active' : 'Ready to Connect'}
-              </Text>
-            </View>
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>
+              Experience real-time spiritual guidance with AI companions
+            </Text>
           </View>
         </SafeAreaView>
       </LinearGradient>
@@ -317,43 +324,42 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    paddingVertical: 30,
+    paddingTop: 20,
+    paddingBottom: 30,
   },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
     color: '#fff',
-    textShadowColor: 'rgba(0,0,0,0.3)',
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 4,
   },
   subtitle: {
-    fontSize: 16,
-    color: 'rgba(255,255,255,0.9)',
+    fontSize: 18,
+    color: '#fff',
+    opacity: 0.9,
     marginTop: 5,
   },
-  buildInfo: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.8)',
-    marginTop: 10,
-    fontStyle: 'italic',
-  },
-  characterSection: {
-    marginVertical: 20,
+  characterSelection: {
+    marginBottom: 40,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '600',
     color: '#fff',
-    marginBottom: 15,
     textAlign: 'center',
+    marginBottom: 20,
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   characterButtons: {
     flexDirection: 'row',
     justifyContent: 'space-around',
   },
   characterButton: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     borderRadius: 15,
     padding: 20,
     alignItems: 'center',
@@ -362,69 +368,86 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   selectedCharacter: {
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
     borderColor: '#fff',
   },
   characterName: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
     color: '#666',
-    marginTop: 8,
+    marginTop: 10,
   },
-  characterDesc: {
-    fontSize: 12,
-    color: '#888',
+  characterDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 5,
     textAlign: 'center',
-    marginTop: 4,
   },
   selectedCharacterText: {
     color: '#fff',
   },
-  voiceSection: {
+  connectionSection: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  voiceButton: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: 'rgba(255,255,255,0.3)',
+  connectionIndicator: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
     justifyContent: 'center',
     alignItems: 'center',
+    marginBottom: 30,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 8,
   },
-  speakingButton: {
-    backgroundColor: 'rgba(76, 175, 80, 0.8)',
-  },
-  voiceButtonInner: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  voiceStatus: {
-    fontSize: 16,
-    color: '#fff',
-    marginTop: 20,
-    textAlign: 'center',
-    fontWeight: '500',
-  },
-  statusSection: {
-    paddingBottom: 30,
-  },
-  statusItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   statusText: {
+    fontSize: 18,
+    color: '#fff',
+    textAlign: 'center',
+    marginBottom: 30,
+    paddingHorizontal: 20,
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  connectButton: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 40,
+    paddingVertical: 15,
+    borderRadius: 25,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  disconnectButton: {
+    backgroundColor: '#FF5722',
+  },
+  connectingButton: {
+    backgroundColor: '#FFC107',
+  },
+  connectButtonText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    textAlign: 'center',
+  },
+  footer: {
+    paddingBottom: 20,
+    alignItems: 'center',
+  },
+  footerText: {
     fontSize: 14,
     color: '#fff',
-    marginLeft: 8,
+    opacity: 0.8,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
 }); 

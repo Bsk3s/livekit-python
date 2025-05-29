@@ -111,7 +111,7 @@ class SpiritualAgentWorker:
                 raise
             
             try:
-                llm_service = create_gpt4o_mini(instructions=character.personality)
+                llm_service = create_gpt4o_mini()
                 logger.info("✅ LLM service created")
             except Exception as e:
                 logger.error(f"❌ Failed to create LLM service: {e}")
@@ -240,9 +240,8 @@ class SpiritualAgentWorker:
             
             # Create agent with character personality
             try:
-                # Agent class doesn't accept name or instructions parameters
-                # These are handled through the session
-                agent = Agent()
+                # Agent class requires instructions parameter
+                agent = Agent(instructions=character.personality)
                 logger.info(f"✅ Agent created for {character.name}")
             except Exception as e:
                 logger.error(f"❌ Failed to create agent: {e}")

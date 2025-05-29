@@ -3,79 +3,34 @@
     "name": "Heavenly Hub Voice Agent",
     "slug": "heavenly-hub-voice-agent",
     "version": "1.0.0",
+    "runtimeVersion": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "scheme": "heavenly-hub",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#6366f1"
+      "backgroundColor": "#ffffff"
     },
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.heavenlyhub.voiceagent",
-      "buildNumber": "1",
-      "infoPlist": {
-        "NSMicrophoneUsageDescription": "This app needs access to your microphone for voice communication with spiritual guides.",
-        "NSCameraUsageDescription": "This app may need camera access for enhanced spiritual guidance features.",
-        "NSLocalNetworkUsageDescription": "Heavenly Hub needs local network access to connect to voice guidance services.",
-        "ITSAppUsesNonExemptEncryption": false,
-        "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true,
-          "NSExceptionDomains": {
-            "208.78.106.135": {
-              "NSExceptionAllowsInsecureHTTPLoads": true,
-              "NSExceptionMinimumTLSVersion": "1.0",
-              "NSIncludesSubdomains": true
-            },
-            "localhost": {
-              "NSExceptionAllowsInsecureHTTPLoads": true,
-              "NSExceptionMinimumTLSVersion": "1.0"
-            }
-          }
-        }
-      },
-      "deploymentTarget": "13.0"
+      "bundleIdentifier": "com.heavenlyhub.voiceagent"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#6366f1"
+        "backgroundColor": "#ffffff"
       },
-      "package": "com.heavenlyhub.voiceagent",
-      "versionCode": 1,
-      "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.INTERNET",
-        "android.permission.ACCESS_NETWORK_STATE",
-        "android.permission.WAKE_LOCK"
-      ]
+      "package": "com.heavenlyhub.voiceagent"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      [
-        "expo-dev-client",
-        {
-          "addGeneratedScheme": false
-        }
-      ],
-      [
-        "react-native-permissions",
-        {
-          "iosPermissions": [
-            "Microphone",
-            "Camera"
-          ]
-        }
-      ],
-      "@livekit/react-native-expo-plugin"
+      "expo-dev-client"
     ],
     "extra": {
       "eas": {
