@@ -383,8 +383,7 @@ def main():
         load_threshold=0.8,
         # Allow time for graceful shutdown (30 minutes default)
         drain_timeout=1800,  # 30 minutes in seconds
-        # Set worker permissions
-        permissions=None,  # Use defaults: can publish, subscribe, publish data
+        # Don't set permissions to None - let it use defaults
     )
     
     try:
