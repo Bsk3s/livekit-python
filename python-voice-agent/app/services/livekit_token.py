@@ -1,4 +1,4 @@
-from livekit import api
+from livekit.api import AccessToken, VideoGrants
 from datetime import datetime, timedelta
 import os
 import logging
@@ -43,7 +43,7 @@ def create_spiritual_access_token(
             raise ValueError(f"Invalid character: {character}. Must be 'adina' or 'raffa'")
         
         # Create video grants with appropriate permissions
-        grants = api.VideoGrants(
+        grants = VideoGrants(
             room_join=True,
             room=room,
             room_create=True,  # Allow room creation if it doesn't exist
@@ -53,21 +53,13 @@ def create_spiritual_access_token(
             can_update_own_metadata=True  # User can update their own metadata
         )
         
-        # Create access token with expiration
-        token = api.AccessToken(api_key=api_key, api_secret=api_secret)
-        token.grants = grants
-        token.identity = f"user_{user_id}"  # Prefix for clarity
-        token.name = user_name
-        
-        # Set token expiration
-        token.ttl = timedelta(minutes=duration_minutes)
-        
-        # Add metadata for character context
-        token.metadata = {
-            "character": character,
-            "session_type": "spiritual_guidance",
-            "created_at": datetime.utcnow().isoformat()
-        }
+        # Create access token using the fluent API
+        token = AccessToken(api_key=api_key, api_secret=api_secret) \
+            .with_identity(f"user_{user_id}") \
+            .with_name(user_name) \
+            .with_grants(grants) \
+            .with_ttl(timedelta(minutes=duration_minutes)) \
+            .with_metadata(f'{{"character": "{character}", "session_type": "spiritual_guidance", "created_at": "{datetime.utcnow().isoformat()}"}}')
         
         jwt_token = token.to_jwt()
         
