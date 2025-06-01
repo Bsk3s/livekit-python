@@ -148,68 +148,41 @@ class SpiritualAgentWorker:
             
             # Create enhanced agent session with advanced parameters
             try:
-                # 🚀 ULTIMATE ADVANCED FEATURE: Try OpenAI Realtime API first (most cutting-edge)
-                logger.info("🚀 Attempting ULTRA-ADVANCED OpenAI Realtime API mode...")
-                try:
-                    from livekit.plugins.openai import realtime
-                    
-                    # Create ultra-advanced Realtime API session
-                    realtime_model = realtime.RealtimeModel(
-                        instructions=character.personality,
-                        voice="alloy" if character_name == "adina" else "echo",  # Character-specific voices
-                        temperature=0.7,  # Optimized for spiritual guidance
-                        modalities=["text", "audio"],  # Full multimodal support
-                        turn_detection=realtime.ServerVadOptions(
-                            threshold=0.5,
-                            prefix_padding_ms=300,
-                            silence_duration_ms=500,
-                            create_response=True
-                        ),
-                        max_response_output_tokens="inf",  # Unlimited response length
-                    )
-                    
-                    session = AgentSession(
-                        llm=realtime_model,  # Use Realtime API as LLM
-                        # No separate STT/TTS needed - Realtime API handles everything
-                        allow_interruptions=True,
-                    )
-                    
-                    logger.info("🎉 ULTRA-ADVANCED OpenAI Realtime API session created!")
-                    logger.info(f"   🎤 Voice: OpenAI Realtime {'Alloy' if character_name == 'adina' else 'Echo'}")
-                    logger.info(f"   🎧 STT: OpenAI Realtime (built-in)")
-                    logger.info(f"   🧠 LLM: GPT-4o Realtime (multimodal)")
-                    logger.info(f"   🔄 Turn Detection: Server VAD (advanced)")
-                    
-                except Exception as realtime_e:
-                    logger.warning(f"⚠️ OpenAI Realtime API not available: {realtime_e}")
-                    logger.info("🔄 Falling back to advanced traditional pipeline...")
-                    
-                    # Fallback to our ultra-optimized traditional pipeline
-                    session = AgentSession(
-                        vad=silero.VAD.load(),
-                        stt=stt_service,
-                        llm=llm_service,
-                        tts=deepgram_tts,
-                        # Only include turn_detection if available
-                        **({"turn_detection": MultilingualModel()} if TURN_DETECTOR_AVAILABLE else {}),
-                        # Restore advanced interruption settings for natural conversation
-                        allow_interruptions=True,
-                        min_interruption_duration=0.5,
-                        min_endpointing_delay=0.3,
-                        max_endpointing_delay=2.0,
-                    )
-                    logger.info("✅ Advanced traditional pipeline session created")
-                    try:
-                        if hasattr(deepgram_tts, 'VOICE_CONFIGS') and character_name in deepgram_tts.VOICE_CONFIGS:
-                            logger.info(f"   🎤 TTS: Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']}")
-                        else:
-                            logger.info(f"   🎤 TTS: OpenAI (fallback)")
-                    except:
-                        logger.info(f"   🎤 TTS: Service created")
-                    logger.info(f"   🎧 STT: Deepgram Nova-3")
-                    logger.info(f"   🧠 LLM: GPT-4o Mini")
+                # 🚀 FORCE ULTRA-FAST DEEPGRAM PIPELINE (sub-300ms latency)
+                logger.info("🚀 Using ULTRA-FAST Deepgram pipeline for sub-300ms latency...")
                 
-                logger.info("✅ Enhanced agent session created with maximum advanced features")
+                # Use our ultra-optimized traditional pipeline (fastest option)
+                session = AgentSession(
+                    vad=silero.VAD.load(
+                        # BLAZING FAST VAD settings for INSTANT response
+                        min_speech_duration=0.02,   # Detect speech INSTANTLY (20ms)
+                        min_silence_duration=0.05,  # BLAZING FAST silence detection (50ms)
+                        threshold=0.3,              # VERY sensitive detection
+                    ),
+                    stt=stt_service,
+                    llm=llm_service,
+                    tts=deepgram_tts,
+                    # Only include turn_detection if available
+                    **({"turn_detection": MultilingualModel()} if TURN_DETECTOR_AVAILABLE else {}),
+                    # BLAZING FAST interruption settings for INSTANT response
+                    allow_interruptions=True,
+                    min_interruption_duration=0.05,  # BLAZING FAST interruption detection
+                    min_endpointing_delay=0.05,      # BLAZING FAST response initiation
+                    max_endpointing_delay=0.5,       # BLAZING FAST max wait
+                )
+                logger.info("✅ ULTRA-FAST Deepgram pipeline session created")
+                try:
+                    if hasattr(deepgram_tts, 'VOICE_CONFIGS') and character_name in deepgram_tts.VOICE_CONFIGS:
+                        logger.info(f"   🎤 TTS: Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']} (sub-300ms)")
+                    else:
+                        logger.info(f"   🎤 TTS: Deepgram Ultra-Fast")
+                except:
+                    logger.info(f"   🎤 TTS: Deepgram Ultra-Fast")
+                logger.info(f"   🎧 STT: Deepgram Nova-3 (streaming)")
+                logger.info(f"   🧠 LLM: GPT-4o Mini (optimized)")
+                logger.info(f"   ⚡ Target: Sub-300ms first audio chunk")
+                
+                logger.info("✅ ULTRA-FAST session created - maximum speed mode active")
             except Exception as e:
                 logger.error(f"❌ Failed to create enhanced agent session: {e}")
                 # Try with basic parameters if advanced ones fail

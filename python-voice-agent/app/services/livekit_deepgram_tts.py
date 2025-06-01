@@ -43,6 +43,7 @@ class LiveKitDeepgramTTS(tts.TTS):
         self._session: Optional[aiohttp.ClientSession] = None
         self._current_character = "adina"  # Default character
         self._active_streams = set()  # Track active streams for interruption
+        self._connection_warmed = False  # Track if connection is pre-warmed
         
         logger.info("Ultra-optimized LiveKit Deepgram TTS initialized for sub-300ms latency")
     
@@ -58,23 +59,29 @@ class LiveKitDeepgramTTS(tts.TTS):
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create optimized HTTP session with connection pooling"""
         if self._session is None or self._session.closed:
-            # Ultra-optimized connector for sub-300ms latency
+            # BLAZING FAST connector for sub-200ms latency
             connector = aiohttp.TCPConnector(
-                limit=10,  # Connection pool size
-                limit_per_host=5,  # Connections per host
-                ttl_dns_cache=300,  # DNS cache TTL
+                limit=100,  # MASSIVE connection pool size
+                limit_per_host=50,  # MASSIVE connections per host
+                ttl_dns_cache=7200,  # 2 hour DNS cache TTL
                 use_dns_cache=True,  # Enable DNS caching
-                keepalive_timeout=30,  # Keep connections alive
+                keepalive_timeout=600,  # Keep connections alive 10 minutes
                 enable_cleanup_closed=True,  # Clean up closed connections
-                force_close=False,  # Reuse connections
-                ssl=False  # Disable SSL verification for speed (API uses HTTPS anyway)
+                force_close=False,  # Reuse connections aggressively
+                ssl=False,  # Disable SSL verification for maximum speed
+                family=0,  # Use any address family for speed
+                local_addr=None,  # No local address binding
+                resolver=None,  # Use default resolver
+                verify_ssl=False,  # Disable SSL verification for speed
+                happy_eyeballs_delay=0,  # No delay for IPv6/IPv4 fallback
+                interleave=1,  # Interleave address families for speed
             )
             
-            # Optimized timeout settings
+            # BLAZING FAST timeout settings
             timeout = aiohttp.ClientTimeout(
-                total=10,  # Total timeout
-                connect=2,  # Connection timeout
-                sock_read=5  # Socket read timeout
+                total=2,  # BLAZING FAST total timeout (2 seconds)
+                connect=0.3,  # BLAZING FAST connection timeout (300ms)
+                sock_read=0.5  # BLAZING FAST socket read timeout (500ms)
             )
             
             self._session = aiohttp.ClientSession(
@@ -92,6 +99,36 @@ class LiveKitDeepgramTTS(tts.TTS):
         
         return self._session
     
+    async def _warm_connection(self):
+        """Pre-warm the connection to eliminate cold start latency"""
+        if self._connection_warmed:
+            return
+            
+        try:
+            session = await self._get_session()
+            # Make a tiny test request to warm up the connection
+            test_params = {
+                "model": "aura-2-luna-en",
+                "encoding": "linear16",
+                "sample_rate": 24000,
+                "container": "none",
+            }
+            test_payload = {"text": "Hi"}  # Minimal text for warming
+            
+            url = f"{self.base_url}?" + "&".join([f"{k}={v}" for k, v in test_params.items()])
+            
+            async with session.post(url, json=test_payload) as response:
+                # Just read a tiny bit to establish connection
+                async for chunk in response.content.iter_chunked(100):
+                    break  # Only need first tiny chunk
+            
+            self._connection_warmed = True
+            logger.info("🔥 Connection pre-warmed for ultra-fast responses")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Connection warming failed: {e}")
+            # Don't fail if warming doesn't work
+    
     def synthesize(self, text: str) -> "ChunkedStream":
         """Synthesize text to audio stream (LiveKit TTS interface)"""
         return ChunkedStream(self, text, self._current_character)
@@ -107,6 +144,9 @@ class LiveKitDeepgramTTS(tts.TTS):
         if not text.strip():
             logger.warning("Empty text provided for TTS")
             return
+        
+        # Pre-warm connection for ultra-fast response
+        await self._warm_connection()
         
         config = self.VOICE_CONFIGS[character]
         session = await self._get_session()
@@ -140,8 +180,8 @@ class LiveKitDeepgramTTS(tts.TTS):
                     logger.error(f"Deepgram API error {response.status}: {error_text}")
                     raise Exception(f"Deepgram API error {response.status}: {error_text}")
                 
-                # Ultra-small chunks for immediate streaming (sub-300ms target)
-                chunk_size = 1024  # 1KB chunks for fastest initial response
+                # BLAZING FAST chunks for INSTANT streaming (sub-200ms target)
+                chunk_size = 128  # BLAZING FAST chunks (128 bytes) for INSTANT response
                 
                 async for chunk in response.content.iter_chunked(chunk_size):
                     # Check for interruption
