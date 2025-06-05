@@ -116,7 +116,16 @@ class SpiritualAgentWorker:
                 logger.info("✅ LLM service created")
             except Exception as e:
                 logger.error(f"❌ Failed to create LLM service: {e}")
-                raise
+                # Add retry logic for LLM service creation
+                logger.info("🔄 Retrying LLM service creation...")
+                try:
+                    import time
+                    time.sleep(2)  # Brief pause before retry
+                    llm_service = create_gpt4o_mini()
+                    logger.info("✅ LLM service created on retry")
+                except Exception as retry_e:
+                    logger.error(f"❌ LLM service retry also failed: {retry_e}")
+                    raise
             
             try:
                 # Restore advanced Deepgram TTS with character-specific voices

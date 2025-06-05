@@ -1,12 +1,15 @@
 from livekit.plugins import openai
 
 def create_gpt4o_mini():
-    """Create GPT-4o Mini LLM"""
+    """Create GPT-4o Mini LLM service with enhanced connection handling"""
     return openai.LLM(
         model="gpt-4o-mini",
-        temperature=0.7
+        temperature=0.7,
+        # Add robust connection settings for production reliability
+        timeout=30.0,  # 30 second timeout instead of default 10s
+        max_retries=3,  # Retry failed requests 3 times
     )
 
 def create_character_llm(character_personality):
     """Create LLM configured with character personality"""
-    return create_gpt4o_mini(instructions=character_personality) 
+    return create_gpt4o_mini() 
