@@ -172,8 +172,9 @@ class SpiritualAgentWorker:
                     stt=stt_service,
                     llm=llm_service,
                     tts=deepgram_tts,
-                    # Only include turn_detection if available
-                    **({"turn_detection": MultilingualModel()} if TURN_DETECTOR_AVAILABLE else {}),
+                    # Disable turn_detection to avoid model download issues
+                    # Standard VAD is working perfectly for our use case
+                    # **({"turn_detection": MultilingualModel()} if TURN_DETECTOR_AVAILABLE else {}),
                     # BLAZING FAST interruption settings for INSTANT response
                     allow_interruptions=True,
                     min_interruption_duration=0.05,  # BLAZING FAST interruption detection
