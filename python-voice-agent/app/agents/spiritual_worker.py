@@ -35,15 +35,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Try to import turn detector, but make it optional
-try:
-    from livekit.plugins.turn_detector.multilingual import MultilingualModel
-    TURN_DETECTOR_AVAILABLE = True
-    logger.info("✅ Turn detector plugin available")
-except ImportError as e:
-    TURN_DETECTOR_AVAILABLE = False
-    logger.warning(f"⚠️ Turn detector plugin not available: {e}")
-    logger.info("🔄 Agent will use standard VAD-based turn detection")
+# Turn detector removed - using stable VAD-based detection only
+TURN_DETECTOR_AVAILABLE = False
+logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)")
 
 from app.characters.character_factory import CharacterFactory
 from app.services.deepgram_service import create_deepgram_stt

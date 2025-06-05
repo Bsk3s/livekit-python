@@ -8,7 +8,6 @@ livekit-agents[deepgram,openai,silero]
 livekit-plugins-deepgram
 livekit-plugins-openai
 livekit-plugins-silero
-livekit-plugins-turn-detector
 livekit-plugins-anthropic
 livekit-plugins-cartesia
 
