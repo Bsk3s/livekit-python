@@ -2,6 +2,7 @@
 """
 Production Spiritual Guidance Agent Worker
 Runs continuously on Render, spawning character instances when users join rooms
+Deployment: January 29, 2025 - Ensuring worker service is active alongside API
 """
 
 import asyncio
