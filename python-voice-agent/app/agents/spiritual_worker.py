@@ -16,6 +16,14 @@ from datetime import datetime
 # Add the parent directory to Python path for module resolution
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+# CRITICAL: Sanitize environment variables to fix API key issues
+# Remove any trailing whitespace/newlines that cause "illegal header value" errors
+if os.getenv("OPENAI_API_KEY"):
+    os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY").strip()
+    
+if os.getenv("DEEPGRAM_API_KEY"):
+    os.environ["DEEPGRAM_API_KEY"] = os.getenv("DEEPGRAM_API_KEY").strip()
+
 from livekit.agents import (
     Agent, AgentSession, JobContext, WorkerOptions, cli
 )
