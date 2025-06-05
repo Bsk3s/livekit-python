@@ -5,9 +5,9 @@ def create_gpt4o_mini():
     return openai.LLM(
         model="gpt-4o-mini",
         temperature=0.7,
-        # Add robust connection settings for production reliability
+        # Enhanced timeout for production reliability
         timeout=30.0,  # 30 second timeout instead of default 10s
-        max_retries=3,  # Retry failed requests 3 times
+        # Note: max_retries not supported by LiveKit OpenAI plugin
     )
 
 def create_character_llm(character_personality):
