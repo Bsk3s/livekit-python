@@ -23,6 +23,9 @@ scipy
 aiohttp
 httpx
 
+# WebSocket for real-time TTS streaming
+websockets
+
 # Environment & Configuration
 python-dotenv
 pydantic-settings

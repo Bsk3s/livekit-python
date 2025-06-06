@@ -50,7 +50,7 @@ logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)
 from app.characters.character_factory import CharacterFactory
 from app.services.deepgram_service import create_deepgram_stt
 from app.services.llm_service import create_gpt4o_mini
-from app.services.livekit_deepgram_tts import LiveKitDeepgramTTS
+from app.services.deepgram_websocket_tts import DeepgramWebSocketTTS
 
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
@@ -130,13 +130,13 @@ class SpiritualAgentWorker:
                     raise
             
             try:
-                # Restore advanced Deepgram TTS with character-specific voices
-                deepgram_tts = LiveKitDeepgramTTS()
+                # 🚀 REAL-TIME DEEPGRAM WEBSOCKET TTS (sub-200ms latency)
+                deepgram_tts = DeepgramWebSocketTTS()
                 deepgram_tts.set_character(character_name)
-                logger.info(f"✅ TTS service created (Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']})")
+                logger.info(f"✅ REAL-TIME WebSocket TTS service created (Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']})")
             except Exception as e:
-                logger.error(f"❌ Failed to create Deepgram TTS service: {e}")
-                # Fallback to OpenAI TTS if Deepgram fails
+                logger.error(f"❌ Failed to create WebSocket TTS service: {e}")
+                # Fallback to OpenAI TTS if WebSocket fails
                 logger.info("🔄 Falling back to OpenAI TTS...")
                 try:
                     from livekit.plugins import openai
@@ -148,9 +148,9 @@ class SpiritualAgentWorker:
             
             logger.info(f"🚀 Services initialized for {character_name}")
             try:
-                # Try to log Deepgram voice model if available
+                # Try to log WebSocket voice model if available
                 if hasattr(deepgram_tts, 'VOICE_CONFIGS') and character_name in deepgram_tts.VOICE_CONFIGS:
-                    logger.info(f"   🎤 TTS: Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']}")
+                    logger.info(f"   🎤 TTS: Deepgram WebSocket {deepgram_tts.VOICE_CONFIGS[character_name]['model']} (REAL-TIME)")
                 else:
                     logger.info(f"   🎤 TTS: OpenAI (fallback)")
             except:
@@ -160,8 +160,8 @@ class SpiritualAgentWorker:
             
             # Create enhanced agent session with advanced parameters
             try:
-                # 🚀 FORCE ULTRA-FAST DEEPGRAM PIPELINE (sub-300ms latency)
-                logger.info("🚀 Using ULTRA-FAST Deepgram pipeline for sub-300ms latency...")
+                # 🚀 FORCE ULTRA-FAST REAL-TIME PIPELINE (sub-200ms latency)
+                logger.info("🚀 Using REAL-TIME WebSocket pipeline for sub-200ms latency...")
                 
                 # Use our ultra-optimized traditional pipeline (fastest option)
                 session = AgentSession(
@@ -183,19 +183,19 @@ class SpiritualAgentWorker:
                     min_endpointing_delay=0.05,      # BLAZING FAST response initiation
                     max_endpointing_delay=0.5,       # BLAZING FAST max wait
                 )
-                logger.info("✅ ULTRA-FAST Deepgram pipeline session created")
+                logger.info("✅ REAL-TIME WebSocket session created - maximum speed mode active")
                 try:
                     if hasattr(deepgram_tts, 'VOICE_CONFIGS') and character_name in deepgram_tts.VOICE_CONFIGS:
-                        logger.info(f"   🎤 TTS: Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']} (sub-300ms)")
+                        logger.info(f"   🎤 TTS: Deepgram WebSocket {deepgram_tts.VOICE_CONFIGS[character_name]['model']} (sub-200ms)")
                     else:
-                        logger.info(f"   🎤 TTS: Deepgram Ultra-Fast")
+                        logger.info(f"   🎤 TTS: OpenAI (fallback)")
                 except:
-                    logger.info(f"   🎤 TTS: Deepgram Ultra-Fast")
+                    logger.info(f"   🎤 TTS: Real-time streaming")
                 logger.info(f"   🎧 STT: Deepgram Nova-3 (streaming)")
                 logger.info(f"   🧠 LLM: GPT-4o Mini (optimized)")
-                logger.info(f"   ⚡ Target: Sub-300ms first audio chunk")
+                logger.info(f"   ⚡ Target: Sub-200ms first audio chunk")
                 
-                logger.info("✅ ULTRA-FAST session created - maximum speed mode active")
+                logger.info("✅ REAL-TIME WebSocket session created - maximum speed mode active")
             except Exception as e:
                 logger.error(f"❌ Failed to create enhanced agent session: {e}")
                 # Try with basic parameters if advanced ones fail
@@ -275,13 +275,13 @@ class SpiritualAgentWorker:
             if 'room_name' in locals() and room_name in self.active_sessions:
                 del self.active_sessions[room_name]
             
-            # Cleanup TTS service if it's Deepgram
+            # Cleanup TTS service if it's WebSocket Deepgram
             if 'deepgram_tts' in locals() and hasattr(deepgram_tts, 'aclose'):
                 try:
                     await deepgram_tts.aclose()
-                    logger.info("🧹 Deepgram TTS service closed")
+                    logger.info("🧹 WebSocket TTS service closed")
                 except Exception as e:
-                    logger.warning(f"⚠️ Error closing TTS service: {e}")
+                    logger.warning(f"⚠️ Error closing WebSocket TTS service: {e}")
             
             logger.info(f"🧹 Cleaned up session for room {locals().get('room_name', 'unknown')}")
     
