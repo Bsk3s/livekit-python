@@ -169,7 +169,6 @@ class SpiritualAgentWorker:
                         # BLAZING FAST VAD settings for INSTANT response
                         min_speech_duration=0.02,   # Detect speech INSTANTLY (20ms)
                         min_silence_duration=0.05,  # BLAZING FAST silence detection (50ms)
-                        threshold=0.3,              # VERY sensitive detection
                     ),
                     stt=stt_service,
                     llm=llm_service,

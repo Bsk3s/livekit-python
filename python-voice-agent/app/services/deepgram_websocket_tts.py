@@ -268,6 +268,7 @@ class StreamingContext:
     
     def __init__(self, tts_instance: DeepgramWebSocketTTS):
         self._tts = tts_instance
+        self._current_stream = None
     
     async def __aenter__(self):
         return self
@@ -275,9 +276,18 @@ class StreamingContext:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
     
+    def __aiter__(self):
+        return self
+    
+    async def __anext__(self):
+        # This should never be called directly - synthesize() creates the actual stream
+        raise StopAsyncIteration
+    
     def synthesize(self, text: str) -> "WebSocketStream":
         """Synthesize text using the TTS instance"""
-        return self._tts.synthesize(text)
+        stream = self._tts.synthesize(text)
+        self._current_stream = stream
+        return stream
 
 
 class WebSocketStream:
