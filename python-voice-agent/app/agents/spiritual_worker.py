@@ -245,18 +245,19 @@ class SpiritualAgentWorker:
                 logger.error(f"❌ Failed to start session: {e}")
                 raise
             
-            # Generate advanced character-specific greeting
+            # Generate advanced character-specific greeting with TTS
             try:
-                greeting = self._get_character_greeting(character_name)
-                await session.generate_reply(instructions=greeting)
-                logger.info(f"✅ Character-specific welcome greeting sent for {character_name}")
+                greeting_text = self._get_character_greeting_text(character_name)
+                # Use the agent's say method to actually speak the greeting
+                await agent.say(greeting_text)
+                logger.info(f"✅ Character-specific welcome greeting spoken for {character_name}")
             except Exception as e:
-                logger.error(f"❌ Failed to generate character greeting: {e}")
+                logger.error(f"❌ Failed to speak character greeting: {e}")
                 # Fallback to simple greeting
                 try:
                     simple_greeting = f"Hello! I'm {character.name}, and I'm here to provide spiritual guidance and support. How can I help you today?"
-                    await session.generate_reply(instructions=f"Say this greeting warmly: {simple_greeting}")
-                    logger.info(f"✅ Simple fallback greeting sent")
+                    await agent.say(simple_greeting)
+                    logger.info(f"✅ Simple fallback greeting spoken")
                 except Exception as fallback_e:
                     logger.error(f"❌ Even simple greeting failed: {fallback_e}")
                     # Don't raise - greeting failure shouldn't kill the session
@@ -299,6 +300,18 @@ class SpiritualAgentWorker:
         except Exception as e:
             logger.error(f"Error parsing room name {room_name}: {e}")
             return None
+    
+    def _get_character_greeting_text(self, character: str) -> str:
+        """Get character-specific greeting text to be spoken"""
+        config = CharacterFactory.get_character_config(character)
+        
+        greetings = {
+            "adina": "Welcome, dear soul. I'm Adina, and I'm so glad you're here with me today. Know that you are not alone on this journey; I'm here to offer you comfort, support, and gentle wisdom as you navigate whatever you're experiencing. Let's take this time together to find peace and healing.",
+            
+            "raffa": "Greetings, my friend. I'm Raffa, and I welcome you with open arms to this sacred space. I'm here to walk alongside you, offering spiritual guidance, biblical wisdom, and caring insight for your life's journey. You are heard, you are valued, and together we'll seek the wisdom you need."
+        }
+        
+        return greetings.get(character, greetings["adina"])
     
     def _get_character_greeting(self, character: str) -> str:
         """Get character-specific greeting instructions"""
