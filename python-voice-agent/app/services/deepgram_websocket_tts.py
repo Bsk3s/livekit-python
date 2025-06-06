@@ -68,7 +68,7 @@ class DeepgramWebSocketTTS(tts.TTS):
         """Synthesize text to audio stream (LiveKit TTS interface)"""
         return WebSocketStream(self, text, self._current_character)
     
-    async def stream(self):
+    def stream(self):
         """Create a streaming context manager for LiveKit compatibility"""
         return StreamingContext(self)
     
