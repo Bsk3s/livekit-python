@@ -68,6 +68,10 @@ class DeepgramWebSocketTTS(tts.TTS):
         """Synthesize text to audio stream (LiveKit TTS interface)"""
         return WebSocketStream(self, text, self._current_character)
     
+    async def stream(self):
+        """Create a streaming context manager for LiveKit compatibility"""
+        return StreamingContext(self)
+    
     async def interrupt_all_streams(self):
         """Interrupt all active TTS streams"""
         logger.info(f"🛑 Interrupting {len(self._active_streams)} active WebSocket streams")
@@ -257,6 +261,23 @@ class DeepgramWebSocketTTS(tts.TTS):
         """Clean up resources and interrupt active streams"""
         await self.interrupt_all_streams()
         logger.info("🧹 Real-time WebSocket TTS service closed")
+
+
+class StreamingContext:
+    """Async context manager for LiveKit streaming interface"""
+    
+    def __init__(self, tts_instance: DeepgramWebSocketTTS):
+        self._tts = tts_instance
+    
+    async def __aenter__(self):
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def synthesize(self, text: str) -> "WebSocketStream":
+        """Synthesize text using the TTS instance"""
+        return self._tts.synthesize(text)
 
 
 class WebSocketStream:
