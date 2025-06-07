@@ -98,17 +98,18 @@ class DeepgramWebSocketTTS(tts.TTS):
         # Minimum 1 second between connections to prevent spam
         if time_since_last < 1.0:
             wait_time = 1.0 - time_since_last
-            logger.info(f"⏳ Rate limiting: waiting {wait_time:.1f}s before next connection")
+            logger.info(f"⏳ TTS Rate limiting: waiting {wait_time:.1f}s before next connection")
             await asyncio.sleep(wait_time)
         
         self._last_connection_time = time.time()
         self._connection_count += 1
+        logger.debug(f"🔢 TTS Connection #{self._connection_count}")
     
-    async def _exponential_backoff(self):
+    async def _exponential_backoff(self, attempt: int):
         """Implement exponential backoff for retries"""
         if self._retry_count > 0:
             backoff_time = min(2 ** self._retry_count, 30)  # Max 30 seconds
-            logger.info(f"🔄 Retry #{self._retry_count}: backing off for {backoff_time}s")
+            logger.info(f"🔄 TTS Retry #{self._retry_count}: backing off for {backoff_time}s")
             await asyncio.sleep(backoff_time)
         self._retry_count += 1
     
@@ -140,56 +141,49 @@ class DeepgramWebSocketTTS(tts.TTS):
                 
                 # Apply exponential backoff if this is a retry
                 if attempt > 0:
-                    await self._exponential_backoff()
+                    await self._exponential_backoff(attempt)
                 
-                # Connect to Deepgram WebSocket TTS streaming endpoint
-                websocket = await websockets.connect(self.websocket_url, extra_headers=headers)
-                self._active_connections.add(websocket)
-                logger.info(f"✅ WebSocket connection established (attempt {attempt + 1})")
+                # Use the new connection method
+                websocket = await self._connect_websocket(stream_id)
+                if not websocket:
+                    logger.error("❌ Failed to establish WebSocket connection")
+                    continue
+                
+                logger.info(f"✅ TTS WebSocket connection established (attempt {attempt + 1})")
+                logger.info(f"🌐 TTS WebSocket state: {websocket.state}")
                 
                 # Reset retry count on successful connection
                 self._retry_count = 0
                 
-                # Send configuration message
-                config_message = {
-                    "type": "config",
-                    "model": config["model"],
-                    "encoding": "linear16",
-                    "sample_rate": 24000,
-                    "container": "none"
-                }
-                
-                await websocket.send(json.dumps(config_message))
-                logger.info(f"📤 Sent config: {config['model']}")
-                
                 # Split text into smaller chunks for faster streaming
                 text_chunks = self._split_text_for_streaming(text)
-                logger.info(f"📝 Split text into {len(text_chunks)} chunks for optimal streaming")
+                logger.info(f"📝 TTS Split text into {len(text_chunks)} chunks for optimal streaming")
+                logger.debug(f"📝 TTS Text chunks: {[chunk[:30] + '...' if len(chunk) > 30 else chunk for chunk in text_chunks]}")
                 
                 # Send text chunks and listen for audio simultaneously
                 async def send_text():
-                    """Send text chunks to WebSocket"""
+                    """Send text chunks to WebSocket using correct Deepgram TTS API"""
                     try:
                         for i, chunk in enumerate(text_chunks):
                             if stream_id not in self._active_streams:
                                 logger.info(f"🛑 Stream {stream_id} interrupted during text sending")
                                 break
                             
-                            # Send text chunk
-                            text_message = {
-                                "type": "text",
+                            # Send Speak message (correct format for Deepgram TTS API)
+                            speak_message = {
+                                "type": "Speak",
                                 "text": chunk
                             }
-                            await websocket.send(json.dumps(text_message))
-                            logger.debug(f"📤 Sent text chunk {i+1}/{len(text_chunks)}: '{chunk[:30]}...'")
+                            await websocket.send(json.dumps(speak_message))
+                            logger.debug(f"📤 Sent Speak message {i+1}/{len(text_chunks)}: '{chunk[:30]}...'")
                             
                             # Small delay between chunks to allow processing
                             await asyncio.sleep(0.01)
                         
-                        # Send flush to trigger synthesis
-                        flush_message = {"type": "flush"}
+                        # Send Flush to trigger synthesis (correct format)
+                        flush_message = {"type": "Flush"}
                         await websocket.send(json.dumps(flush_message))
-                        logger.info("📤 Sent flush - synthesis starting")
+                        logger.info("📤 Sent Flush - synthesis starting")
                         
                     except Exception as e:
                         logger.error(f"Error sending text: {e}")
@@ -205,43 +199,50 @@ class DeepgramWebSocketTTS(tts.TTS):
                             logger.info(f"🛑 Stream {stream_id} interrupted, stopping WebSocket")
                             break
                         
-                        try:
-                            data = json.loads(message)
+                        # Handle binary audio data (Deepgram TTS sends raw audio bytes)
+                        if isinstance(message, bytes):
+                            chunk_count += 1
                             
-                            if data.get("type") == "audio":
-                                chunk_count += 1
-                                
-                                # Log first chunk latency (targeting sub-200ms)
-                                if not first_chunk_yielded:
-                                    first_chunk_latency = (time.time() - start_time) * 1000
-                                    logger.info(f"🚀 REAL-TIME FIRST CHUNK for {character}: {first_chunk_latency:.0f}ms")
-                                    first_chunk_yielded = True
-                                
-                                # Decode base64 audio
-                                audio_base64 = data.get("audio", "")
-                                if audio_base64:
-                                    audio_bytes = base64.b64decode(audio_base64)
-                                    
-                                    # Convert to AudioFrame and yield immediately
-                                    audio_frame = self._create_audio_frame(audio_bytes)
-                                    total_audio_duration += audio_frame.duration
-                                    yield audio_frame
-                                    
-                                    # Log progress every 20 chunks
-                                    if chunk_count % 20 == 0:
-                                        logger.debug(f"🎵 Streamed {chunk_count} chunks, {total_audio_duration:.1f}s audio")
+                            # Log first chunk latency (targeting sub-200ms)
+                            if not first_chunk_yielded:
+                                first_chunk_latency = (time.time() - start_time) * 1000
+                                logger.info(f"🚀 TTS REAL-TIME FIRST CHUNK for {character}: {first_chunk_latency:.0f}ms")
+                                first_chunk_yielded = True
                             
-                            elif data.get("type") == "metadata":
-                                logger.debug(f"📊 Metadata: {data}")
+                            logger.debug(f"🎵 TTS Received audio chunk #{chunk_count}: {len(message)} bytes")
                             
-                            elif data.get("type") == "error":
-                                error_msg = data.get("message", "Unknown error")
-                                logger.error(f"❌ WebSocket error: {error_msg}")
-                                raise Exception(f"Deepgram WebSocket error: {error_msg}")
+                            # Convert to AudioFrame and yield immediately
+                            audio_frame = self._create_audio_frame(message)
+                            total_audio_duration += audio_frame.duration
+                            logger.debug(f"🎵 TTS Created AudioFrame: {audio_frame.samples_per_channel} samples, {audio_frame.duration:.3f}s")
+                            yield audio_frame
+                            
+                            # Log progress every 10 chunks (more frequent for debugging)
+                            if chunk_count % 10 == 0:
+                                logger.info(f"🎵 TTS Streamed {chunk_count} chunks, {total_audio_duration:.1f}s audio")
                         
-                        except json.JSONDecodeError:
-                            logger.warning(f"⚠️ Invalid JSON received: {message}")
-                            continue
+                        else:
+                            # Handle JSON messages
+                            try:
+                                data = json.loads(message)
+                                
+                                if data.get("type") == "Metadata":
+                                    logger.debug(f"📊 TTS Metadata: {data}")
+                                
+                                elif data.get("type") == "Flushed":
+                                    logger.info("✅ TTS Synthesis flushed - all audio sent")
+                                
+                                elif data.get("type") == "Error":
+                                    error_msg = data.get("message", "Unknown error")
+                                    logger.error(f"❌ TTS WebSocket error: {error_msg}")
+                                    raise Exception(f"Deepgram TTS WebSocket error: {error_msg}")
+                                
+                                else:
+                                    logger.debug(f"📨 TTS Unknown message type: {data.get('type', 'no_type')}")
+                            
+                            except json.JSONDecodeError:
+                                logger.warning(f"⚠️ Invalid JSON received: {message}")
+                                continue
                 
                 except websockets.exceptions.ConnectionClosed:
                     logger.info("🔌 WebSocket connection closed")
@@ -258,28 +259,45 @@ class DeepgramWebSocketTTS(tts.TTS):
                 
             except websockets.exceptions.InvalidStatusCode as e:
                 if e.status_code == 429:
-                    logger.warning(f"⚠️ Rate limited (429) on attempt {attempt + 1}/{max_retries}")
+                    logger.warning(f"⚠️ TTS Rate limited (429) on attempt {attempt + 1}/{max_retries}")
                     if attempt < max_retries - 1:
                         # Exponential backoff for rate limiting
                         backoff_time = min(2 ** (attempt + 1), 30)
-                        logger.info(f"⏳ Backing off for {backoff_time}s due to rate limiting")
+                        logger.info(f"⏳ TTS Backing off for {backoff_time}s due to rate limiting")
                         await asyncio.sleep(backoff_time)
                         continue
                     else:
-                        logger.error("❌ Max retries exceeded due to rate limiting")
-                        raise Exception("Deepgram API rate limit exceeded - consider upgrading your plan")
+                        logger.error("❌ TTS Max retries exceeded due to rate limiting")
+                        raise Exception("Deepgram TTS API rate limit exceeded - consider upgrading your plan")
+                elif e.status_code == 401:
+                    logger.error(f"❌ TTS Authentication failed (401) - check DEEPGRAM_API_KEY")
+                    raise Exception("Deepgram TTS authentication failed - invalid API key")
+                elif e.status_code == 403:
+                    logger.error(f"❌ TTS Access forbidden (403) - check API key permissions")
+                    raise Exception("Deepgram TTS access forbidden - check API key permissions")
                 else:
-                    logger.error(f"❌ WebSocket connection failed with status {e.status_code}: {e}")
+                    logger.error(f"❌ TTS WebSocket handshake failed with status {e.status_code}: {e}")
                     raise
             
-            except Exception as e:
-                logger.error(f"❌ WebSocket synthesis error on attempt {attempt + 1}: {e}")
+            except websockets.exceptions.WebSocketException as e:
+                logger.error(f"❌ TTS WebSocket protocol error on attempt {attempt + 1}: {e}")
                 if attempt < max_retries - 1:
-                    logger.info(f"🔄 Retrying in {2 ** attempt}s...")
+                    logger.info(f"🔄 TTS Retrying WebSocket connection in {2 ** attempt}s...")
                     await asyncio.sleep(2 ** attempt)
                     continue
                 else:
-                    logger.error("❌ Max retries exceeded for WebSocket synthesis")
+                    logger.error("❌ TTS Max retries exceeded for WebSocket protocol errors")
+                    raise
+            
+            except Exception as e:
+                logger.error(f"❌ TTS WebSocket synthesis error on attempt {attempt + 1}: {e}")
+                logger.error(f"❌ TTS Error type: {type(e).__name__}")
+                if attempt < max_retries - 1:
+                    logger.info(f"🔄 TTS Retrying in {2 ** attempt}s...")
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                else:
+                    logger.error("❌ TTS Max retries exceeded for WebSocket synthesis")
                     raise
             
             finally:
@@ -443,4 +461,60 @@ class WebSocketStream:
                 await self._stream.aclose()
             except:
                 pass
-        logger.debug(f"🧹 WebSocket stream {self._stream_id} closed") 
+        logger.debug(f"🧹 WebSocket stream {self._stream_id} closed")
+
+    async def _connect_websocket(self, stream_id: str) -> Optional[websockets.WebSocketServerProtocol]:
+        """Connect to Deepgram TTS WebSocket with rate limiting and retry logic"""
+        
+        # Check rate limiting
+        if not self._check_rate_limit():
+            logger.warning("🚫 Rate limiting: Too many connection attempts")
+            return None
+        
+        # Build WebSocket URL with parameters - CORRECTED ENDPOINT
+        params = {
+            "model": self.voice_config["model"],
+            "encoding": "linear16",
+            "sample_rate": "24000"
+        }
+        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        url = f"wss://api.deepgram.com/v1/speak?{query_string}"
+        
+        headers = {
+            "Authorization": f"Token {self.api_key.strip()}"
+        }
+        
+        logger.info(f"🌐 Connecting to Deepgram TTS: {url}")
+        logger.info(f"🎤 Voice: {self.voice_config['model']}")
+        
+        for attempt in range(3):  # 3 retry attempts
+            try:
+                # Use websockets 15.0 API with additional_headers
+                websocket = await websockets.connect(
+                    url,
+                    additional_headers=headers
+                )
+                
+                # Track active connection
+                self._active_connections.add(stream_id)
+                logger.info(f"✅ WebSocket connected for stream {stream_id} (attempt {attempt + 1})")
+                return websocket
+                
+            except websockets.exceptions.InvalidStatusCode as e:
+                if e.status_code == 429:
+                    logger.error(f"🚫 Rate limited (429) on attempt {attempt + 1}")
+                    logger.error("💡 Consider upgrading your Deepgram plan for higher TTS streaming limits")
+                    
+                    # Exponential backoff for rate limiting
+                    await self._exponential_backoff(attempt)
+                    continue
+                else:
+                    logger.error(f"❌ WebSocket handshake failed: HTTP {e.status_code}")
+                    break
+                    
+            except Exception as e:
+                logger.error(f"❌ WebSocket connection error (attempt {attempt + 1}): {e}")
+                if attempt < 2:  # Don't wait after last attempt
+                    await self._exponential_backoff(attempt)
+        
+        return None 

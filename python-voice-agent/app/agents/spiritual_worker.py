@@ -48,7 +48,7 @@ TURN_DETECTOR_AVAILABLE = False
 logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)")
 
 from app.characters.character_factory import CharacterFactory
-from app.services.deepgram_service import create_deepgram_stt
+from app.services.deepgram_service import create_stt_with_fallback
 from app.services.llm_service import create_gpt4o_mini
 from app.services.deepgram_websocket_tts import DeepgramWebSocketTTS
 
@@ -107,8 +107,8 @@ class SpiritualAgentWorker:
             
             # Create basic services (simplified for stability)
             try:
-                stt_service = create_deepgram_stt()
-                logger.info("✅ STT service created")
+                stt_service = create_stt_with_fallback()
+                logger.info("✅ Rate-limited STT service created (prevents 429 errors)")
             except Exception as e:
                 logger.error(f"❌ Failed to create STT service: {e}")
                 raise
@@ -155,7 +155,7 @@ class SpiritualAgentWorker:
                     logger.info(f"   🎤 TTS: OpenAI (fallback)")
             except:
                 logger.info(f"   🎤 TTS: Service created")
-            logger.info(f"   🎧 STT: Deepgram Nova-3")
+            logger.info(f"   🎧 STT: Rate-limited Deepgram Nova-3 (prevents 429 errors)")
             logger.info(f"   🧠 LLM: GPT-4o Mini")
             
             # Create enhanced agent session with advanced parameters
@@ -270,6 +270,14 @@ class SpiritualAgentWorker:
                     logger.info("🧹 WebSocket TTS service closed")
                 except Exception as e:
                     logger.warning(f"⚠️ Error closing WebSocket TTS service: {e}")
+            
+            # Cleanup STT service if it has rate limiting
+            if 'stt_service' in locals() and hasattr(stt_service, 'aclose'):
+                try:
+                    await stt_service.aclose()
+                    logger.info("🧹 Rate-limited STT service closed")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error closing STT service: {e}")
             
             logger.info(f"🧹 Cleaned up session for room {locals().get('room_name', 'unknown')}")
     
