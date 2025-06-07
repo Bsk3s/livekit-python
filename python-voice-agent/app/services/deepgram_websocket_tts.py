@@ -52,6 +52,10 @@ class DeepgramWebSocketTTS(tts.TTS):
         self.websocket_url = "wss://api.deepgram.com/v1/tts-stream"
         self._current_character = "adina"  # Default character
         self._active_streams = set()  # Track active streams for interruption
+        self._connection_count = 0  # Track connections to prevent spam
+        self._last_connection_time = 0  # Rate limiting
+        self._retry_count = 0  # Exponential backoff
+        self._active_connections = set()  # Track active WebSocket connections
         
         logger.info("🚀 Real-time Deepgram WebSocket TTS initialized")
     
@@ -76,6 +80,37 @@ class DeepgramWebSocketTTS(tts.TTS):
         """Interrupt all active TTS streams"""
         logger.info(f"🛑 Interrupting {len(self._active_streams)} active WebSocket streams")
         self._active_streams.clear()
+        
+        # Close all active WebSocket connections
+        for connection in list(self._active_connections):
+            try:
+                await connection.close()
+                logger.debug("🔌 Closed WebSocket connection during interruption")
+            except Exception as e:
+                logger.warning(f"⚠️ Error closing WebSocket during interruption: {e}")
+        self._active_connections.clear()
+    
+    async def _check_rate_limit(self):
+        """Implement rate limiting to prevent 429 errors"""
+        current_time = time.time()
+        time_since_last = current_time - self._last_connection_time
+        
+        # Minimum 1 second between connections to prevent spam
+        if time_since_last < 1.0:
+            wait_time = 1.0 - time_since_last
+            logger.info(f"⏳ Rate limiting: waiting {wait_time:.1f}s before next connection")
+            await asyncio.sleep(wait_time)
+        
+        self._last_connection_time = time.time()
+        self._connection_count += 1
+    
+    async def _exponential_backoff(self):
+        """Implement exponential backoff for retries"""
+        if self._retry_count > 0:
+            backoff_time = min(2 ** self._retry_count, 30)  # Max 30 seconds
+            logger.info(f"🔄 Retry #{self._retry_count}: backing off for {backoff_time}s")
+            await asyncio.sleep(backoff_time)
+        self._retry_count += 1
     
     async def _synthesize_streaming(self, text: str, character: str, stream_id: str) -> AsyncGenerator[rtc.AudioFrame, None]:
         """Real-time WebSocket streaming synthesis targeting sub-200ms first chunk"""
@@ -88,6 +123,8 @@ class DeepgramWebSocketTTS(tts.TTS):
         first_chunk_yielded = False
         chunk_count = 0
         total_audio_duration = 0.0
+        websocket = None
+        max_retries = 3
         
         logger.info(f"🎤 Starting REAL-TIME WebSocket TTS for {character}: '{text[:50]}...'")
         
@@ -96,10 +133,22 @@ class DeepgramWebSocketTTS(tts.TTS):
             "Authorization": f"Token {self.api_key}"
         }
         
-        try:
-            # Connect to Deepgram WebSocket TTS streaming endpoint
-            async with websockets.connect(self.websocket_url, extra_headers=headers) as websocket:
-                logger.info("✅ WebSocket connection established")
+        for attempt in range(max_retries):
+            try:
+                # Apply rate limiting to prevent 429 errors
+                await self._check_rate_limit()
+                
+                # Apply exponential backoff if this is a retry
+                if attempt > 0:
+                    await self._exponential_backoff()
+                
+                # Connect to Deepgram WebSocket TTS streaming endpoint
+                websocket = await websockets.connect(self.websocket_url, extra_headers=headers)
+                self._active_connections.add(websocket)
+                logger.info(f"✅ WebSocket connection established (attempt {attempt + 1})")
+                
+                # Reset retry count on successful connection
+                self._retry_count = 0
                 
                 # Send configuration message
                 config_message = {
@@ -199,19 +248,53 @@ class DeepgramWebSocketTTS(tts.TTS):
                 
                 # Wait for send task to complete
                 try:
-                    await send_task
-                except:
-                    pass
+                    await asyncio.wait_for(send_task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("⏰ Send task timed out")
+                    send_task.cancel()
+                
+                # Success - break out of retry loop
+                break
+                
+            except websockets.exceptions.InvalidStatusCode as e:
+                if e.status_code == 429:
+                    logger.warning(f"⚠️ Rate limited (429) on attempt {attempt + 1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        # Exponential backoff for rate limiting
+                        backoff_time = min(2 ** (attempt + 1), 30)
+                        logger.info(f"⏳ Backing off for {backoff_time}s due to rate limiting")
+                        await asyncio.sleep(backoff_time)
+                        continue
+                    else:
+                        logger.error("❌ Max retries exceeded due to rate limiting")
+                        raise Exception("Deepgram API rate limit exceeded - consider upgrading your plan")
+                else:
+                    logger.error(f"❌ WebSocket connection failed with status {e.status_code}: {e}")
+                    raise
             
-            total_time = (time.time() - start_time) * 1000
-            logger.info(f"✅ Real-time WebSocket TTS complete for {character}: {chunk_count} chunks, {total_time:.0f}ms total, {total_audio_duration:.1f}s audio")
+            except Exception as e:
+                logger.error(f"❌ WebSocket synthesis error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"🔄 Retrying in {2 ** attempt}s...")
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                else:
+                    logger.error("❌ Max retries exceeded for WebSocket synthesis")
+                    raise
             
-        except Exception as e:
-            logger.error(f"❌ Real-time WebSocket TTS error for {character}: {e}")
-            raise
-        finally:
-            # Remove from active streams
-            self._active_streams.discard(stream_id)
+            finally:
+                # Always clean up the WebSocket connection
+                if websocket:
+                    try:
+                        self._active_connections.discard(websocket)
+                        await websocket.close()
+                        logger.debug("🔌 WebSocket connection closed and cleaned up")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error closing WebSocket: {e}")
+        
+        # Log final statistics
+        total_time = (time.time() - start_time) * 1000
+        logger.info(f"✅ WebSocket TTS completed: {chunk_count} chunks, {total_audio_duration:.1f}s audio, {total_time:.0f}ms total")
     
     def _split_text_for_streaming(self, text: str, max_chunk_size: int = 100) -> list:
         """Split text into optimal chunks for streaming"""
@@ -258,9 +341,28 @@ class DeepgramWebSocketTTS(tts.TTS):
         )
     
     async def aclose(self):
-        """Clean up resources and interrupt active streams"""
+        """Clean up all WebSocket connections and reset state"""
+        logger.info("🧹 Cleaning up Deepgram WebSocket TTS service")
+        
+        # Interrupt all active streams
         await self.interrupt_all_streams()
-        logger.info("🧹 Real-time WebSocket TTS service closed")
+        
+        # Close any remaining connections
+        for connection in list(self._active_connections):
+            try:
+                await connection.close()
+                logger.debug("🔌 Closed remaining WebSocket connection")
+            except Exception as e:
+                logger.warning(f"⚠️ Error closing remaining WebSocket: {e}")
+        
+        # Reset all state
+        self._active_connections.clear()
+        self._active_streams.clear()
+        self._connection_count = 0
+        self._retry_count = 0
+        self._last_connection_time = 0
+        
+        logger.info("✅ Deepgram WebSocket TTS service cleaned up")
 
 
 class StreamingContext:

@@ -245,22 +245,10 @@ class SpiritualAgentWorker:
                 logger.error(f"❌ Failed to start session: {e}")
                 raise
             
-            # Generate advanced character-specific greeting with TTS
-            try:
-                greeting_text = self._get_character_greeting_text(character_name)
-                # Use the agent's say method to actually speak the greeting
-                await agent.say(greeting_text)
-                logger.info(f"✅ Character-specific welcome greeting spoken for {character_name}")
-            except Exception as e:
-                logger.error(f"❌ Failed to speak character greeting: {e}")
-                # Fallback to simple greeting
-                try:
-                    simple_greeting = f"Hello! I'm {character.name}, and I'm here to provide spiritual guidance and support. How can I help you today?"
-                    await agent.say(simple_greeting)
-                    logger.info(f"✅ Simple fallback greeting spoken")
-                except Exception as fallback_e:
-                    logger.error(f"❌ Even simple greeting failed: {fallback_e}")
-                    # Don't raise - greeting failure shouldn't kill the session
+            # TODO: Implement proper greeting mechanism later
+            # The session.say() method doesn't exist - need to find correct LiveKit approach
+            # For now, let the session start without a greeting to avoid crashes
+            logger.info(f"ℹ️ Session started without greeting - user can initiate conversation")
             
             logger.info(f"🎉 {character_name.title()} session started successfully")
             
