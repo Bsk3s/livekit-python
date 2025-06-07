@@ -130,16 +130,16 @@ class SpiritualAgentWorker:
                     raise
             
             try:
-                # 🚀 REAL-TIME DEEPGRAM WEBSOCKET TTS (sub-200ms latency)
+                # 🚀 REAL-TIME DEEPGRAM WEBSOCKET TTS (sub-200ms latency) - URL FIXED
                 deepgram_tts = DeepgramWebSocketTTS()
                 deepgram_tts.set_character(character_name)
                 logger.info(f"✅ REAL-TIME WebSocket TTS service created (Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']})")
+                logger.info("   🔧 URL endpoint bug fixed: using correct /v1/tts-stream endpoint")
             except Exception as e:
                 logger.error(f"❌ Failed to create WebSocket TTS service: {e}")
                 # Fallback to OpenAI TTS if WebSocket fails
                 logger.info("🔄 Falling back to OpenAI TTS...")
                 try:
-                    from livekit.plugins import openai
                     deepgram_tts = openai.TTS(voice="alloy")
                     logger.info("✅ TTS service created (OpenAI fallback)")
                 except Exception as fallback_e:

@@ -382,6 +382,63 @@ class DeepgramWebSocketTTS(tts.TTS):
         
         logger.info("✅ Deepgram WebSocket TTS service cleaned up")
 
+    async def _connect_websocket(self, stream_id: str) -> Optional[websockets.WebSocketServerProtocol]:
+        """Connect to Deepgram TTS WebSocket with rate limiting and retry logic"""
+        
+        # Apply rate limiting
+        await self._check_rate_limit()
+        
+        # Get voice config for current character
+        voice_config = self.VOICE_CONFIGS[self._current_character]
+        
+        # Build WebSocket URL with parameters - CORRECTED ENDPOINT
+        params = {
+            "model": voice_config["model"],
+            "encoding": "linear16",
+            "sample_rate": "24000"
+        }
+        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        url = f"wss://api.deepgram.com/v1/tts-stream?{query_string}"
+        
+        headers = {
+            "Authorization": f"Token {self.api_key.strip()}"
+        }
+        
+        logger.info(f"🌐 Connecting to Deepgram TTS: {url}")
+        logger.info(f"🎤 Voice: {voice_config['model']}")
+        
+        for attempt in range(3):  # 3 retry attempts
+            try:
+                # Use websockets connect with additional_headers
+                websocket = await websockets.connect(
+                    url,
+                    additional_headers=headers
+                )
+                
+                # Track active connection
+                self._active_connections.add(websocket)
+                logger.info(f"✅ WebSocket connected for stream {stream_id} (attempt {attempt + 1})")
+                return websocket
+                
+            except websockets.exceptions.InvalidStatusCode as e:
+                if e.status_code == 429:
+                    logger.error(f"🚫 Rate limited (429) on attempt {attempt + 1}")
+                    logger.error("💡 Consider upgrading your Deepgram plan for higher TTS streaming limits")
+                    
+                    # Exponential backoff for rate limiting
+                    await self._exponential_backoff(attempt)
+                    continue
+                else:
+                    logger.error(f"❌ WebSocket handshake failed: HTTP {e.status_code}")
+                    break
+                    
+            except Exception as e:
+                logger.error(f"❌ WebSocket connection error (attempt {attempt + 1}): {e}")
+                if attempt < 2:  # Don't wait after last attempt
+                    await self._exponential_backoff(attempt)
+        
+        return None
+
 
 class StreamingContext:
     """Async context manager for LiveKit streaming interface"""
@@ -461,60 +518,4 @@ class WebSocketStream:
                 await self._stream.aclose()
             except:
                 pass
-        logger.debug(f"🧹 WebSocket stream {self._stream_id} closed")
-
-    async def _connect_websocket(self, stream_id: str) -> Optional[websockets.WebSocketServerProtocol]:
-        """Connect to Deepgram TTS WebSocket with rate limiting and retry logic"""
-        
-        # Check rate limiting
-        if not self._check_rate_limit():
-            logger.warning("🚫 Rate limiting: Too many connection attempts")
-            return None
-        
-        # Build WebSocket URL with parameters - CORRECTED ENDPOINT
-        params = {
-            "model": self.voice_config["model"],
-            "encoding": "linear16",
-            "sample_rate": "24000"
-        }
-        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-        url = f"wss://api.deepgram.com/v1/speak?{query_string}"
-        
-        headers = {
-            "Authorization": f"Token {self.api_key.strip()}"
-        }
-        
-        logger.info(f"🌐 Connecting to Deepgram TTS: {url}")
-        logger.info(f"🎤 Voice: {self.voice_config['model']}")
-        
-        for attempt in range(3):  # 3 retry attempts
-            try:
-                # Use websockets 15.0 API with additional_headers
-                websocket = await websockets.connect(
-                    url,
-                    additional_headers=headers
-                )
-                
-                # Track active connection
-                self._active_connections.add(stream_id)
-                logger.info(f"✅ WebSocket connected for stream {stream_id} (attempt {attempt + 1})")
-                return websocket
-                
-            except websockets.exceptions.InvalidStatusCode as e:
-                if e.status_code == 429:
-                    logger.error(f"🚫 Rate limited (429) on attempt {attempt + 1}")
-                    logger.error("💡 Consider upgrading your Deepgram plan for higher TTS streaming limits")
-                    
-                    # Exponential backoff for rate limiting
-                    await self._exponential_backoff(attempt)
-                    continue
-                else:
-                    logger.error(f"❌ WebSocket handshake failed: HTTP {e.status_code}")
-                    break
-                    
-            except Exception as e:
-                logger.error(f"❌ WebSocket connection error (attempt {attempt + 1}): {e}")
-                if attempt < 2:  # Don't wait after last attempt
-                    await self._exponential_backoff(attempt)
-        
-        return None 
+        logger.debug(f"🧹 WebSocket stream {self._stream_id} closed") 
