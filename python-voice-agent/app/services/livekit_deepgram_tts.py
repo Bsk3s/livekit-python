@@ -17,11 +17,11 @@ class LiveKitDeepgramTTS(tts.TTS):
     
     VOICE_CONFIGS = {
         "adina": {
-            "model": "aura-2-luna-en",  # Gentle, soothing female - conversational
+            "model": "aura-2-luna-en",  # Premium Aura-2 model - high quality female voice
             "description": "Compassionate spiritual guide"
         },
         "raffa": {
-            "model": "aura-2-orion-en",  # Warm, approachable male - friendly mentor
+            "model": "aura-2-orion-en",  # Premium Aura-2 model - high quality male voice
             "description": "Wise spiritual mentor"
         }
     }

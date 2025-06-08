@@ -50,7 +50,7 @@ logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)
 from app.characters.character_factory import CharacterFactory
 from app.services.deepgram_service import create_stt_with_fallback
 from app.services.llm_service import create_gpt4o_mini
-from app.services.deepgram_websocket_tts import DeepgramWebSocketTTS
+from app.services.livekit_deepgram_tts import LiveKitDeepgramTTS
 
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
@@ -130,14 +130,14 @@ class SpiritualAgentWorker:
                     raise
             
             try:
-                # 🚀 REAL-TIME DEEPGRAM WEBSOCKET TTS (sub-200ms latency) - URL FIXED
-                deepgram_tts = DeepgramWebSocketTTS()
+                # 🚀 REAL-TIME DEEPGRAM TTS (using LiveKit-compatible service)
+                deepgram_tts = LiveKitDeepgramTTS()
                 deepgram_tts.set_character(character_name)
-                logger.info(f"✅ REAL-TIME WebSocket TTS service created (Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']})")
-                logger.info("   🔧 URL endpoint bug fixed: using correct /v1/speak endpoint")
+                logger.info(f"✅ Deepgram TTS service created (Model: {deepgram_tts.VOICE_CONFIGS[character_name]['model']})")
+                logger.info("   🔧 Using LiveKit-compatible Deepgram TTS")
             except Exception as e:
-                logger.error(f"❌ Failed to create WebSocket TTS service: {e}")
-                # Fallback to OpenAI TTS if WebSocket fails
+                logger.error(f"❌ Failed to create Deepgram TTS service: {e}")
+                # Fallback to OpenAI TTS if Deepgram fails
                 logger.info("🔄 Falling back to OpenAI TTS...")
                 try:
                     deepgram_tts = openai.TTS(voice="alloy")
