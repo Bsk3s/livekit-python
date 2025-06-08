@@ -245,21 +245,8 @@ class SpiritualAgentWorker:
                 logger.error(f"❌ Failed to start session: {e}")
                 raise
             
-            # Generate initial greeting to establish conversation flow
-            try:
-                greeting_instructions = self._get_character_greeting(character_name)
-                logger.info(f"💬 Generating initial greeting for {character_name}")
-                await session.generate_reply(instructions=greeting_instructions)
-                logger.info(f"✅ Initial greeting generated - conversation flow established")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not generate initial greeting: {e}")
-                # Continue without greeting - not critical for basic functionality
-            
-            # TODO: Implement proper greeting mechanism later
-            # The session.say() method doesn't exist - need to find correct LiveKit approach
-            # For now, let the session start without a greeting to avoid crashes
-            logger.info(f"ℹ️ Session started with greeting - user can initiate conversation")
-            
+            # Session started successfully - LLM will respond to user input automatically
+            logger.info(f"ℹ️ {character_name.title()} is ready to respond to user input")
             logger.info(f"🎉 {character_name.title()} session started successfully")
             
         except Exception as e:

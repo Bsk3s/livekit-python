@@ -281,10 +281,11 @@ def create_openai_whisper_stt():
 def create_stt_with_fallback():
     """Create STT service with rate limiting and automatic fallback"""
     try:
-        # Try rate-limited Deepgram first (best for real-time)
-        return create_rate_limited_deepgram_stt()
+        # Use standard LiveKit Deepgram STT plugin (most reliable)
+        logger.info("🎧 Creating Deepgram STT service...")
+        return create_deepgram_stt()
     except Exception as e:
-        logger.warning(f"⚠️ Rate-limited Deepgram STT failed, falling back to OpenAI Whisper: {e}")
+        logger.warning(f"⚠️ Deepgram STT failed, falling back to OpenAI Whisper: {e}")
         try:
             # Fallback to OpenAI Whisper
             stt_service = create_openai_whisper_stt()
