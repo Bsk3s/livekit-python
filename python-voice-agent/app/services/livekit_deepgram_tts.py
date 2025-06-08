@@ -255,9 +255,25 @@ class ChunkedStream(tts.SynthesizeStream):
         self._stream = None
         self._stream_id = f"tts_{int(time.time() * 1000)}"  # Unique stream ID
         self._interrupted = False
+        self._consumed_queue = asyncio.Queue(maxsize=10)  # Back-pressure queue
         
         # Add to active streams for interruption tracking
         self._tts._active_streams.add(self._stream_id)
+    
+    async def __aenter__(self):
+        """Async context manager entry"""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - clean up resources"""
+        await self.aclose()
+    
+    async def wait_consumed(self):
+        """Wait for back-pressure relief if bandwidth spikes"""
+        try:
+            await asyncio.wait_for(self._consumed_queue.get(), timeout=0.1)
+        except asyncio.TimeoutError:
+            pass  # Continue if no back-pressure signal
     
     def interrupt(self):
         """Interrupt this specific stream"""
@@ -277,6 +293,17 @@ class ChunkedStream(tts.SynthesizeStream):
         
         try:
             audio_frame = await self._stream.__anext__()
+            
+            # Back-pressure handling - wait if queue is full
+            if self._consumed_queue.full():
+                await self.wait_consumed()
+            
+            # Signal that frame is ready for consumption
+            try:
+                self._consumed_queue.put_nowait("consumed")
+            except asyncio.QueueFull:
+                pass  # Queue full, continue anyway
+            
             return tts.SynthesizedAudio(
                 frame=audio_frame,
                 request_id=self._stream_id,
