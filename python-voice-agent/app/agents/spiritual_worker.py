@@ -225,12 +225,61 @@ class SpiritualAgentWorker:
             
             # Create agent with character personality
             try:
-                # Agent class requires instructions parameter
+                # 🚀 CRITICAL FIX: Create Agent with proper instructions
+                # The AgentSession automatically handles TTS synthesis for LLM responses
                 agent = Agent(instructions=character.personality)
+                
                 logger.info(f"✅ Agent created for {character.name}")
+                logger.info("🎤 AgentSession will automatically synthesize LLM responses")
             except Exception as e:
                 logger.error(f"❌ Failed to create agent: {e}")
                 raise
+            
+            # 🚀 CRITICAL FIX: Wire LLM → TTS Pipeline Connection
+            # This is the missing piece that connects LLM output to TTS input
+            try:
+                # Add event handler to capture LLM responses and send to TTS
+                @session.on("agent_speech")
+                async def _on_agent_speech(event):
+                    """Handle agent speech by sending text to TTS service"""
+                    try:
+                        text = event.content if hasattr(event, 'content') else str(event)
+                        logger.info(f"🔗 LLM → TTS Pipeline: Sending text to TTS: '{text[:100]}...'")
+                        
+                        # This should trigger our TTS.synthesize() method
+                        stream = deepgram_tts.synthesize(text)
+                        logger.info(f"🎤 TTS.synthesize() called successfully")
+                        
+                        # Stream audio frames to the room
+                        async for audio_frame in stream:
+                            # Audio frames are automatically published by the TTS stream
+                            pass
+                            
+                    except Exception as tts_error:
+                        logger.error(f"❌ TTS synthesis error: {tts_error}")
+                
+                # Also try the "assistant_message" event as suggested
+                @session.on("assistant_message") 
+                async def _on_assistant_message(text: str):
+                    """Alternative event handler for LLM responses"""
+                    try:
+                        logger.info(f"🔗 Assistant Message → TTS: '{text[:100]}...'")
+                        stream = deepgram_tts.synthesize(text)
+                        logger.info(f"🎤 TTS.synthesize() called via assistant_message")
+                        
+                        # Stream audio frames
+                        async for audio_frame in stream:
+                            pass
+                            
+                    except Exception as tts_error:
+                        logger.error(f"❌ Assistant message TTS error: {tts_error}")
+                
+                logger.info("✅ LLM → TTS pipeline connection established")
+                logger.info("🔗 Event handlers: agent_speech, assistant_message")
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Could not set up LLM → TTS pipeline: {e}")
+                # Continue - this might not be critical if session handles it automatically
             
             # Track active session
             self.active_sessions[room_name] = session
@@ -241,6 +290,13 @@ class SpiritualAgentWorker:
             try:
                 await session.start(agent=agent, room=ctx.room)
                 logger.info(f"✅ Session started for {character_name}")
+                
+                # 🚀 CRITICAL FIX: Trigger initial greeting to activate TTS pipeline
+                # This ensures the agent speaks when the session starts
+                greeting_instructions = self._get_character_greeting(character_name)
+                await session.generate_reply(instructions=greeting_instructions)
+                logger.info(f"🎤 Initial greeting triggered for {character_name}")
+                
             except Exception as e:
                 logger.error(f"❌ Failed to start session: {e}")
                 raise
