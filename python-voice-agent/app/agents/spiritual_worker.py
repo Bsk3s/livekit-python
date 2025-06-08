@@ -172,7 +172,6 @@ class SpiritualAgentWorker:
                     ),
                     stt=stt_service,
                     llm=llm_service,
-                    tts=deepgram_tts,
                     # Disable turn_detection to avoid model download issues
                     # Standard VAD is working perfectly for our use case
                     # **({"turn_detection": MultilingualModel()} if TURN_DETECTOR_AVAILABLE else {}),
@@ -204,7 +203,6 @@ class SpiritualAgentWorker:
                         vad=silero.VAD.load(),
                         stt=stt_service,
                         llm=llm_service,
-                        tts=deepgram_tts,
                         allow_interruptions=True,
                     )
                     logger.info("✅ Basic agent session created")
@@ -225,61 +223,41 @@ class SpiritualAgentWorker:
             
             # Create agent with character personality
             try:
-                # 🚀 CRITICAL FIX: Create Agent with proper instructions
-                # The AgentSession automatically handles TTS synthesis for LLM responses
-                agent = Agent(instructions=character.personality)
+                # 🚀 CRITICAL FIX: Create custom Agent class that manually triggers TTS
+                # This is required because we use a custom DeepgramWebSocketTTS implementation
+                class SpiritualAgent(Agent):
+                    def __init__(self, instructions: str, tts_service):
+                        super().__init__(instructions=instructions)
+                        self.tts_service = tts_service
+                        
+                    async def tts_node(self, text, model_settings=None):
+                        """Override TTS node to manually trigger our custom TTS service"""
+                        try:
+                            async for text_chunk in text:
+                                logger.info(f"🔗 LLM → TTS Pipeline: Sending text to TTS: '{text_chunk[:100]}...'")
+                                
+                                # This triggers our custom TTS.synthesize() method
+                                stream = self.tts_service.synthesize(text_chunk)
+                                logger.info(f"🎤 TTS.synthesize() called successfully")
+                                
+                                # Stream audio frames to the room
+                                async for audio_frame in stream:
+                                    yield audio_frame
+                                    
+                        except Exception as tts_error:
+                            logger.error(f"❌ TTS synthesis error: {tts_error}")
                 
-                logger.info(f"✅ Agent created for {character.name}")
-                logger.info("🎤 AgentSession will automatically synthesize LLM responses")
+                # Create the custom agent with our TTS service
+                agent = SpiritualAgent(
+                    instructions=character.personality,
+                    tts_service=deepgram_tts
+                )
+                
+                logger.info(f"✅ Custom Agent created for {character.name}")
+                logger.info("🔗 LLM → TTS pipeline manually wired via tts_node override")
             except Exception as e:
                 logger.error(f"❌ Failed to create agent: {e}")
                 raise
-            
-            # 🚀 CRITICAL FIX: Wire LLM → TTS Pipeline Connection
-            # This is the missing piece that connects LLM output to TTS input
-            try:
-                # Add event handler to capture LLM responses and send to TTS
-                @session.on("agent_speech")
-                async def _on_agent_speech(event):
-                    """Handle agent speech by sending text to TTS service"""
-                    try:
-                        text = event.content if hasattr(event, 'content') else str(event)
-                        logger.info(f"🔗 LLM → TTS Pipeline: Sending text to TTS: '{text[:100]}...'")
-                        
-                        # This should trigger our TTS.synthesize() method
-                        stream = deepgram_tts.synthesize(text)
-                        logger.info(f"🎤 TTS.synthesize() called successfully")
-                        
-                        # Stream audio frames to the room
-                        async for audio_frame in stream:
-                            # Audio frames are automatically published by the TTS stream
-                            pass
-                            
-                    except Exception as tts_error:
-                        logger.error(f"❌ TTS synthesis error: {tts_error}")
-                
-                # Also try the "assistant_message" event as suggested
-                @session.on("assistant_message") 
-                async def _on_assistant_message(text: str):
-                    """Alternative event handler for LLM responses"""
-                    try:
-                        logger.info(f"🔗 Assistant Message → TTS: '{text[:100]}...'")
-                        stream = deepgram_tts.synthesize(text)
-                        logger.info(f"🎤 TTS.synthesize() called via assistant_message")
-                        
-                        # Stream audio frames
-                        async for audio_frame in stream:
-                            pass
-                            
-                    except Exception as tts_error:
-                        logger.error(f"❌ Assistant message TTS error: {tts_error}")
-                
-                logger.info("✅ LLM → TTS pipeline connection established")
-                logger.info("🔗 Event handlers: agent_speech, assistant_message")
-                
-            except Exception as e:
-                logger.warning(f"⚠️ Could not set up LLM → TTS pipeline: {e}")
-                # Continue - this might not be critical if session handles it automatically
             
             # Track active session
             self.active_sessions[room_name] = session
