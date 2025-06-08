@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 class LiveKitDeepgramTTS(tts.TTS):
     """Ultra-optimized LiveKit-compatible Deepgram TTS targeting sub-300ms latency"""
     
+    # Explicitly declare streaming support for LiveKit
+    supports_streaming = True
+    
     VOICE_CONFIGS = {
         "Adina": {"model": "aura-2-luna-en"},
         "Raffa": {"model": "aura-2-orion-en"}
@@ -127,9 +130,10 @@ class LiveKitDeepgramTTS(tts.TTS):
         """Synthesize text to audio stream (LiveKit TTS interface)"""
         return ChunkedStream(self, text, self._current_character)
     
-    def stream(self, text: str) -> "ChunkedStream":
-        """Stream text to audio (LiveKit streaming TTS interface)"""
+    async def stream(self, text: str, **kwargs) -> "ChunkedStream":
+        """Stream text to audio (PRIMARY LiveKit streaming TTS interface)"""
         logger.info(f"🎤 TTS.stream() called with text: '{text[:50]}...'")
+        logger.info(f"🎤 TTS character: {self._current_character}")
         return ChunkedStream(self, text, self._current_character)
     
     async def interrupt_all_streams(self):
