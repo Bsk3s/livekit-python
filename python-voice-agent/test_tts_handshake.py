@@ -27,7 +27,7 @@ async def test_tts_handshake():
     
     logger.info(f"🔑 Using API key: {api_key[:8]}...")
     
-    websocket_url = "wss://api.deepgram.com/v1/tts-stream"
+    websocket_url = "wss://api.deepgram.com/v1/speak"
     headers = {
         "Authorization": f"Token {api_key.strip()}"
     }

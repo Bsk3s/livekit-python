@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Real-Time Deepgram WebSocket TTS Implementation
-Uses wss://api.deepgram.com/v1/tts-stream for true sub-200ms streaming
+Uses wss://api.deepgram.com/v1/speak for true sub-200ms streaming
 Bypasses the broken SDK to access Deepgram's real streaming API
 """
 
@@ -49,7 +49,7 @@ class DeepgramWebSocketTTS(tts.TTS):
         if not self.api_key:
             raise ValueError("DEEPGRAM_API_KEY environment variable is required")
         
-        self.websocket_url = "wss://api.deepgram.com/v1/tts-stream"
+        self.websocket_url = "wss://api.deepgram.com/v1/speak"
         self._current_character = "adina"  # Default character
         self._active_streams = set()  # Track active streams for interruption
         self._connection_count = 0  # Track connections to prevent spam
@@ -400,7 +400,7 @@ class DeepgramWebSocketTTS(tts.TTS):
             "sample_rate": "24000"
         }
         query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-        url = f"wss://api.deepgram.com/v1/tts-stream?{query_string}"
+        url = f"wss://api.deepgram.com/v1/speak?{query_string}"
         
         headers = {
             "Authorization": f"Token {self.api_key.strip()}"

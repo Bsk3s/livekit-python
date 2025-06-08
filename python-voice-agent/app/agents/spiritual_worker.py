@@ -134,7 +134,7 @@ class SpiritualAgentWorker:
                 deepgram_tts = DeepgramWebSocketTTS()
                 deepgram_tts.set_character(character_name)
                 logger.info(f"✅ REAL-TIME WebSocket TTS service created (Deepgram {deepgram_tts.VOICE_CONFIGS[character_name]['model']})")
-                logger.info("   🔧 URL endpoint bug fixed: using correct /v1/tts-stream endpoint")
+                logger.info("   🔧 URL endpoint bug fixed: using correct /v1/speak endpoint")
             except Exception as e:
                 logger.error(f"❌ Failed to create WebSocket TTS service: {e}")
                 # Fallback to OpenAI TTS if WebSocket fails
@@ -172,6 +172,7 @@ class SpiritualAgentWorker:
                     ),
                     stt=stt_service,
                     llm=llm_service,
+                    tts=deepgram_tts,  # 🔧 CRITICAL FIX: Add TTS service to pipeline
                     # Disable turn_detection to avoid model download issues
                     # Standard VAD is working perfectly for our use case
                     # **({"turn_detection": MultilingualModel()} if TURN_DETECTOR_AVAILABLE else {}),
@@ -182,6 +183,7 @@ class SpiritualAgentWorker:
                     max_endpointing_delay=0.5,       # BLAZING FAST max wait
                 )
                 logger.info("✅ REAL-TIME WebSocket session created - maximum speed mode active")
+                logger.info("🔗 TTS service properly wired into AgentSession pipeline")
                 try:
                     if hasattr(deepgram_tts, 'VOICE_CONFIGS') and character_name in deepgram_tts.VOICE_CONFIGS:
                         logger.info(f"   🎤 TTS: Deepgram WebSocket {deepgram_tts.VOICE_CONFIGS[character_name]['model']} (sub-200ms)")
@@ -203,9 +205,10 @@ class SpiritualAgentWorker:
                         vad=silero.VAD.load(),
                         stt=stt_service,
                         llm=llm_service,
+                        tts=deepgram_tts,  # 🔧 CRITICAL FIX: Add TTS service to fallback too
                         allow_interruptions=True,
                     )
-                    logger.info("✅ Basic agent session created")
+                    logger.info("✅ Basic agent session created with TTS service")
                 except Exception as fallback_e:
                     logger.error(f"❌ Basic agent session also failed: {fallback_e}")
                     raise
@@ -221,40 +224,12 @@ class SpiritualAgentWorker:
                 logger.warning(f"⚠️ Could not attach event handlers: {e}")
                 # Continue without event handlers - not critical
             
-            # Create agent with character personality
+            # Create agent with character personality - USE STANDARD AGENT
             try:
-                # 🚀 CRITICAL FIX: Create custom Agent class that manually triggers TTS
-                # This is required because we use a custom DeepgramWebSocketTTS implementation
-                class SpiritualAgent(Agent):
-                    def __init__(self, instructions: str, tts_service):
-                        super().__init__(instructions=instructions)
-                        self.tts_service = tts_service
-                        
-                    async def tts_node(self, text, model_settings=None):
-                        """Override TTS node to manually trigger our custom TTS service"""
-                        try:
-                            async for text_chunk in text:
-                                logger.info(f"🔗 LLM → TTS Pipeline: Sending text to TTS: '{text_chunk[:100]}...'")
-                                
-                                # This triggers our custom TTS.synthesize() method
-                                stream = self.tts_service.synthesize(text_chunk)
-                                logger.info(f"🎤 TTS.synthesize() called successfully")
-                                
-                                # Stream audio frames to the room
-                                async for audio_frame in stream:
-                                    yield audio_frame
-                                    
-                        except Exception as tts_error:
-                            logger.error(f"❌ TTS synthesis error: {tts_error}")
-                
-                # Create the custom agent with our TTS service
-                agent = SpiritualAgent(
-                    instructions=character.personality,
-                    tts_service=deepgram_tts
-                )
-                
-                logger.info(f"✅ Custom Agent created for {character.name}")
-                logger.info("🔗 LLM → TTS pipeline manually wired via tts_node override")
+                # 🔧 SIMPLIFIED: Use standard Agent class since TTS is now in AgentSession
+                agent = Agent(instructions=character.personality)
+                logger.info(f"✅ Standard Agent created for {character.name}")
+                logger.info("🔗 TTS pipeline handled by AgentSession automatically")
             except Exception as e:
                 logger.error(f"❌ Failed to create agent: {e}")
                 raise
@@ -269,19 +244,13 @@ class SpiritualAgentWorker:
                 await session.start(agent=agent, room=ctx.room)
                 logger.info(f"✅ Session started for {character_name}")
                 
-                # 🚀 CRITICAL FIX: Trigger initial greeting to activate TTS pipeline
-                # This ensures the agent speaks when the session starts
-                greeting_instructions = self._get_character_greeting(character_name)
-                await session.generate_reply(instructions=greeting_instructions)
-                logger.info(f"🎤 Initial greeting triggered for {character_name}")
+                # Session started successfully - LLM will respond to user input automatically
+                logger.info(f"ℹ️ {character_name.title()} is ready to respond to user input")
+                logger.info(f"🎉 {character_name.title()} session started successfully")
                 
             except Exception as e:
                 logger.error(f"❌ Failed to start session: {e}")
                 raise
-            
-            # Session started successfully - LLM will respond to user input automatically
-            logger.info(f"ℹ️ {character_name.title()} is ready to respond to user input")
-            logger.info(f"🎉 {character_name.title()} session started successfully")
             
         except Exception as e:
             logger.error(f"❌ Error in spiritual agent session: {e}")
