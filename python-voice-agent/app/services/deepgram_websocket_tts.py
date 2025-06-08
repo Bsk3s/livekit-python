@@ -68,7 +68,7 @@ class DeepgramWebSocketTTS(tts.TTS):
         config = self.VOICE_CONFIGS[character]
         logger.info(f"Set TTS character to {character} ({config['description']}) - Model: {config['model']}")
     
-    def synthesize(self, text: str) -> "WebSocketStream":
+    def synthesize(self, text: str) -> tts.SynthesizeStream:
         """Synthesize text to audio stream (LiveKit TTS interface)"""
         logger.info(f"🎤 TTS.synthesize() called with text: '{text[:100]}...'")
         logger.info(f"🎤 TTS character: {self._current_character}")
@@ -469,10 +469,11 @@ class StreamingContext:
         return stream
 
 
-class WebSocketStream:
+class WebSocketStream(tts.SynthesizeStream):
     """Real-time WebSocket TTS stream with interruption support"""
     
     def __init__(self, tts_instance: DeepgramWebSocketTTS, text: str, character: str):
+        super().__init__()  # Initialize parent SynthesizeStream
         self._tts = tts_instance
         self._text = text
         self._character = character
