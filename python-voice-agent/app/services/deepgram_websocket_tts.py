@@ -70,6 +70,8 @@ class DeepgramWebSocketTTS(tts.TTS):
     
     def synthesize(self, text: str) -> "WebSocketStream":
         """Synthesize text to audio stream (LiveKit TTS interface)"""
+        logger.info(f"🎤 TTS.synthesize() called with text: '{text[:100]}...'")
+        logger.info(f"🎤 TTS character: {self._current_character}")
         return WebSocketStream(self, text, self._current_character)
     
     def stream(self):
