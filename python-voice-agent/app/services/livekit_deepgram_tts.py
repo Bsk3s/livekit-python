@@ -8,6 +8,7 @@ import numpy as np
 from dotenv import load_dotenv
 import os
 import time
+import uuid
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -16,20 +17,14 @@ class LiveKitDeepgramTTS(tts.TTS):
     """Ultra-optimized LiveKit-compatible Deepgram TTS targeting sub-300ms latency"""
     
     VOICE_CONFIGS = {
-        "adina": {
-            "model": "aura-2-luna-en",  # Premium Aura-2 model - high quality female voice
-            "description": "Compassionate spiritual guide"
-        },
-        "raffa": {
-            "model": "aura-2-orion-en",  # Premium Aura-2 model - high quality male voice
-            "description": "Wise spiritual mentor"
-        }
+        "Adina": {"model": "aura-2-luna-en"},
+        "Raffa": {"model": "aura-2-orion-en"}
     }
     
     def __init__(self):
         super().__init__(
             capabilities=tts.TTSCapabilities(
-                streaming=True,
+                streaming=True,  # We support streaming
             ),
             sample_rate=24000,
             num_channels=1,
@@ -41,20 +36,19 @@ class LiveKitDeepgramTTS(tts.TTS):
         
         self.base_url = "https://api.deepgram.com/v1/speak"
         self._session: Optional[aiohttp.ClientSession] = None
-        self._current_character = "adina"  # Default character
+        self._current_character = "Adina"  # Default character
         self._active_streams = set()  # Track active streams for interruption
         self._connection_warmed = False  # Track if connection is pre-warmed
         
-        logger.info("Ultra-optimized LiveKit Deepgram TTS initialized for sub-300ms latency")
+        logger.info("🚀 Ultra-optimized LiveKit Deepgram TTS initialized")
     
     def set_character(self, character: str):
-        """Set the character voice for TTS"""
-        if character not in self.VOICE_CONFIGS:
-            raise ValueError(f"Invalid character: {character}. Must be one of: {list(self.VOICE_CONFIGS.keys())}")
-        
-        self._current_character = character
-        config = self.VOICE_CONFIGS[character]
-        logger.info(f"Set TTS character to {character} ({config['description']}) - Model: {config['model']}")
+        """Set the current character for voice selection"""
+        if character in self.VOICE_CONFIGS:
+            self._current_character = character
+            logger.info(f"🎭 Character set to: {character} (model: {self.VOICE_CONFIGS[character]['model']})")
+        else:
+            logger.warning(f"Unknown character: {character}, keeping current: {self._current_character}")
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create optimized HTTP session with connection pooling"""
@@ -131,6 +125,11 @@ class LiveKitDeepgramTTS(tts.TTS):
     
     def synthesize(self, text: str) -> "ChunkedStream":
         """Synthesize text to audio stream (LiveKit TTS interface)"""
+        return ChunkedStream(self, text, self._current_character)
+    
+    def stream(self, text: str) -> "ChunkedStream":
+        """Stream text to audio (LiveKit streaming TTS interface)"""
+        logger.info(f"🎤 TTS.stream() called with text: '{text[:50]}...'")
         return ChunkedStream(self, text, self._current_character)
     
     async def interrupt_all_streams(self):
@@ -245,10 +244,11 @@ class LiveKitDeepgramTTS(tts.TTS):
             await self._session.close()
             logger.info("Closed ultra-optimized Deepgram TTS HTTP session")
 
-class ChunkedStream:
+class ChunkedStream(tts.SynthesizeStream):
     """Ultra-optimized LiveKit TTS stream with interruption support"""
     
     def __init__(self, tts_instance: LiveKitDeepgramTTS, text: str, character: str):
+        super().__init__()  # Initialize parent SynthesizeStream
         self._tts = tts_instance
         self._text = text
         self._character = character
