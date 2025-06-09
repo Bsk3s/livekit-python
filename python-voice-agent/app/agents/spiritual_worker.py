@@ -14,7 +14,6 @@ from typing import Dict, Optional, Any
 from datetime import datetime
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli, llm, stt, tts
-from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import openai, deepgram, silero
 from livekit.agents.pipeline import AgentSession, Agent
