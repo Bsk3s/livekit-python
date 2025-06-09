@@ -16,7 +16,7 @@ from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli, llm, stt, tts
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import openai, deepgram, silero
-from livekit.agents.pipeline import AgentSession, Agent
+from livekit.agents import AgentSession, Agent
 from dotenv import load_dotenv
 
 # Add the parent directory to Python path for module resolution
