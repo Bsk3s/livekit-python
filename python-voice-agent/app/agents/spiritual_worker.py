@@ -48,7 +48,6 @@ TURN_DETECTOR_AVAILABLE = False
 logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)")
 
 # Import our services
-from app.services.deepgram_service import RateLimitedDeepgramSTT
 from app.services.llm_service import create_gpt4o_mini
 from app.services.elevenlabs_tts_service import ElevenLabsTTS  # NEW: ElevenLabs TTS
 from app.characters.character_factory import CharacterFactory
@@ -73,8 +72,7 @@ class SpiritualAgentWorker:
             'LIVEKIT_URL',
             'LIVEKIT_API_KEY', 
             'LIVEKIT_API_SECRET',
-            'DEEPGRAM_API_KEY',
-            'OPENAI_API_KEY'
+            'OPENAI_API_KEY'  # CHANGED: Only require OpenAI now, not Deepgram
         ]
         
         missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -108,9 +106,15 @@ class SpiritualAgentWorker:
             
             # Create services
             try:
-                # 🎧 DEEPGRAM STT (keep for speech-to-text)
-                stt_service = RateLimitedDeepgramSTT()
-                logger.info("✅ Rate-limited STT service created (prevents 429 errors)")
+                # 🎧 OPENAI WHISPER STT (replacing Deepgram)
+                logger.info("🎧 Creating OpenAI Whisper STT service...")
+                stt_service = openai.STT(
+                    model="gpt-4o-transcribe",  # Latest high-quality model
+                    language="en"  # English for spiritual guidance
+                )
+                logger.info("✅ OpenAI Whisper STT service created")
+                logger.info("   🎧 Model: gpt-4o-transcribe (high accuracy)")
+                logger.info("   🌍 Language: English")
             except Exception as e:
                 logger.error(f"❌ Failed to create STT service: {e}")
                 raise
@@ -186,7 +190,7 @@ class SpiritualAgentWorker:
                     logger.info(f"   🎙️ TTS: OpenAI TTS-1 HD (fallback)")
             except:
                 logger.info(f"   🎙️ TTS: Service created")
-            logger.info(f"   🎧 STT: Deepgram Nova-3 (rate-limited)")
+            logger.info(f"   🎧 STT: OpenAI Whisper STT")
             logger.info(f"   🧠 LLM: GPT-4o Mini")
             
             # Create enhanced agent session with streaming TTS
@@ -217,7 +221,7 @@ class SpiritualAgentWorker:
                         logger.info(f"   🎙️ TTS: OpenAI TTS-1 HD")
                 except:
                     logger.info(f"   🎙️ TTS: Streaming service")
-                logger.info(f"   🎧 STT: Deepgram Nova-3 (streaming)")
+                logger.info(f"   🎧 STT: OpenAI Whisper STT")
                 logger.info(f"   🧠 LLM: GPT-4o Mini (optimized)")
                 logger.info(f"   ⚡ Target: Natural voice with streaming")
                 
@@ -304,7 +308,7 @@ class SpiritualAgentWorker:
                 except Exception as e:
                     logger.warning(f"⚠️ Error closing STT service: {e}")
             
-            logger.info(f"🧹 Cleaned up session for room {locals().get('room_name', 'unknown')}")
+            logger.info(f"�� Cleaned up session for room {locals().get('room_name', 'unknown')}")
     
     def _extract_character_from_room(self, room_name: str) -> Optional[str]:
         """Extract character name from room name (spiritual-{character}-{session_id})"""
