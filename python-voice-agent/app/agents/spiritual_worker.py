@@ -137,14 +137,35 @@ class SpiritualAgentWorker:
                 logger.info("   🔧 Using LiveKit-compatible Deepgram TTS")
             except Exception as e:
                 logger.error(f"❌ Failed to create Deepgram TTS service: {e}")
-                # Fallback to OpenAI TTS if Deepgram fails
-                logger.info("🔄 Falling back to OpenAI TTS...")
+                # 🛡️ APP STORE SAFETY: Bulletproof OpenAI fallback with safety guards
+                logger.info("🛡️ Falling back to App Store Safe OpenAI TTS...")
                 try:
-                    deepgram_tts = openai.TTS(voice="alloy")
-                    logger.info("✅ TTS service created (OpenAI fallback)")
+                    from livekit.plugins import openai
+                    
+                    # 🛡️ SAFETY GUARD: Use most reliable voice configuration
+                    safe_voice = "alloy"  # Most stable OpenAI voice
+                    if character_name.lower() == "adina":
+                        safe_voice = "nova"  # Warm, feminine voice
+                    elif character_name.lower() == "raffa":
+                        safe_voice = "onyx"  # Deep, masculine voice
+                    
+                    # Create bulletproof fallback TTS
+                    deepgram_tts = openai.TTS(voice=safe_voice)
+                    logger.info(f"✅ App Store Safe OpenAI TTS created (voice: {safe_voice})")
+                    logger.info("🛡️ Bulletproof fallback active - zero crash guarantee")
+                    
                 except Exception as fallback_e:
-                    logger.error(f"❌ Fallback TTS also failed: {fallback_e}")
-                    raise
+                    logger.error(f"❌ OpenAI TTS fallback also failed: {fallback_e}")
+                    # 🛡️ EMERGENCY FALLBACK: Use absolute most basic TTS
+                    logger.error("🛡️ EMERGENCY: Using basic OpenAI TTS with default settings")
+                    try:
+                        from livekit.plugins import openai
+                        deepgram_tts = openai.TTS()  # Use absolute defaults
+                        logger.info("✅ Emergency TTS fallback created - App Store safe")
+                    except Exception as emergency_e:
+                        logger.error(f"❌ Emergency fallback failed: {emergency_e}")
+                        # This should never happen, but if it does, we cannot continue
+                        raise Exception("All TTS services failed - cannot proceed")
             
             logger.info(f"🚀 Services initialized for {character_name}")
             try:

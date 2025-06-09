@@ -261,6 +261,34 @@ class LiveKitDeepgramTTS(tts.TTS):
             await self._session.close()
             logger.info("Closed ultra-optimized Deepgram TTS HTTP session")
 
+    def _sanitize_text_for_tts(self, text: str) -> str:
+        """
+        Sanitize text for TTS to prevent errors and ensure compatibility
+        🛡️ APP STORE SAFETY: Prevent text that could cause timeouts or crashes
+        """
+        if not text or not text.strip():
+            # Never allow empty text that could crash TTS
+            logger.warning("🛡️ Empty/whitespace text provided - using safety fallback")
+            return "Hello, I'm here to help you."
+        
+        # Strip and validate
+        clean_text = text.strip()
+        
+        # 🛡️ CRITICAL APP STORE SAFETY: Limit text length to prevent timeouts
+        # OpenAI has 4096 char limit, but we use 1000 to ensure fast response
+        if len(clean_text) > 1000:
+            logger.warning(f"🛡️ Text too long ({len(clean_text)} chars) - truncating for App Store safety")
+            clean_text = clean_text[:997] + "..."
+        
+        # Remove problematic characters that could cause encoding issues
+        clean_text = clean_text.replace('\x00', '').replace('\ufffd', '')
+        
+        # Remove excessive whitespace
+        clean_text = ' '.join(clean_text.split())
+        
+        logger.debug(f"🛡️ Text sanitized: '{clean_text[:50]}...' (final length: {len(clean_text)})")
+        return clean_text
+
 class ChunkedStream:
     """Ultra-optimized LiveKit TTS stream with interruption support"""
     
