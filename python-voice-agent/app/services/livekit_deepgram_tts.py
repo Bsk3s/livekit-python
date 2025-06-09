@@ -44,7 +44,8 @@ class LiveKitDeepgramTTS(tts.TTS):
         self._connection_warmed = False  # Track if connection is pre-warmed
         
         logger.info("🚀 Ultra-optimized LiveKit Deepgram TTS initialized")
-    
+
+
     def set_character(self, character: str):
         """Set the current character for voice selection"""
         if character in self.VOICE_CONFIGS:
@@ -65,11 +66,10 @@ class LiveKitDeepgramTTS(tts.TTS):
                 keepalive_timeout=600,  # Keep connections alive 10 minutes
                 enable_cleanup_closed=True,  # Clean up closed connections
                 force_close=False,  # Reuse connections aggressively
-                ssl=False,  # Disable SSL verification for maximum speed
+                verify_ssl=True,  # Enable SSL verification for security
                 family=0,  # Use any address family for speed
                 local_addr=None,  # No local address binding
                 resolver=None,  # Use default resolver
-                verify_ssl=False,  # Disable SSL verification for speed
                 happy_eyeballs_delay=0,  # No delay for IPv6/IPv4 fallback
                 interleave=1,  # Interleave address families for speed
             )
@@ -248,11 +248,10 @@ class LiveKitDeepgramTTS(tts.TTS):
             await self._session.close()
             logger.info("Closed ultra-optimized Deepgram TTS HTTP session")
 
-class ChunkedStream(tts.SynthesizeStream):
+class ChunkedStream:
     """Ultra-optimized LiveKit TTS stream with interruption support"""
     
     def __init__(self, tts_instance: LiveKitDeepgramTTS, text: str, character: str):
-        super().__init__()  # Initialize parent SynthesizeStream
         self._tts = tts_instance
         self._text = text
         self._character = character
@@ -324,4 +323,9 @@ class ChunkedStream(tts.SynthesizeStream):
             try:
                 await self._stream.aclose()
             except:
-                pass 
+                pass
+
+# Add verification logging at module level to confirm correct class loading
+logger.info("✅ Loaded TTS class: %r", LiveKitDeepgramTTS)
+logger.info("✅ TTS class location: %s", __file__)
+logger.info("✅ TTS supports_streaming: %s", getattr(LiveKitDeepgramTTS, 'supports_streaming', 'NOT_SET')) 
