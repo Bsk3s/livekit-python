@@ -10,8 +10,15 @@ import logging
 import os
 import signal
 import sys
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from datetime import datetime
+from livekit import rtc
+from livekit.agents import JobContext, WorkerOptions, cli, llm, stt, tts
+from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.plugins import openai, deepgram, silero
+from livekit.agents.pipeline import AgentSession, Agent
+from dotenv import load_dotenv
 
 # Add the parent directory to Python path for module resolution
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -23,12 +30,6 @@ if os.getenv("OPENAI_API_KEY"):
     
 if os.getenv("DEEPGRAM_API_KEY"):
     os.environ["DEEPGRAM_API_KEY"] = os.getenv("DEEPGRAM_API_KEY").strip()
-
-from livekit.agents import (
-    Agent, AgentSession, JobContext, WorkerOptions, cli
-)
-from livekit.plugins import deepgram, openai, silero
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -47,10 +48,11 @@ logger = logging.getLogger(__name__)
 TURN_DETECTOR_AVAILABLE = False
 logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)")
 
-from app.characters.character_factory import CharacterFactory
-from app.services.deepgram_service import create_stt_with_fallback
+# Import our services
+from app.services.deepgram_service import RateLimitedDeepgramSTT
 from app.services.llm_service import create_gpt4o_mini
-from app.services.livekit_deepgram_tts import LiveKitDeepgramTTS
+from app.services.elevenlabs_tts_service import ElevenLabsTTS  # NEW: ElevenLabs TTS
+from app.characters.character_factory import CharacterFactory
 
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
@@ -105,9 +107,10 @@ class SpiritualAgentWorker:
             # Create character instance
             character = CharacterFactory.create_character(character_name)
             
-            # Create basic services (simplified for stability)
+            # Create services
             try:
-                stt_service = create_stt_with_fallback()
+                # 🎧 DEEPGRAM STT (keep for speech-to-text)
+                stt_service = RateLimitedDeepgramSTT()
                 logger.info("✅ Rate-limited STT service created (prevents 429 errors)")
             except Exception as e:
                 logger.error(f"❌ Failed to create STT service: {e}")
@@ -130,93 +133,95 @@ class SpiritualAgentWorker:
                     raise
             
             try:
-                # 🚀 REAL-TIME DEEPGRAM TTS (using LiveKit-compatible service)
-                deepgram_tts = LiveKitDeepgramTTS()
-                deepgram_tts.set_character(character_name)
-                logger.info(f"✅ Deepgram TTS service created (Model: {deepgram_tts.VOICE_CONFIGS[character_name]['model']})")
-                logger.info("   🔧 Using LiveKit-compatible Deepgram TTS")
+                # 🎙️ PRIMARY: ELEVENLABS STREAMING TTS
+                logger.info("🎙️ Attempting to create ElevenLabs streaming TTS...")
+                tts_service = ElevenLabsTTS()
+                tts_service.set_character(character_name)
+                logger.info(f"✅ ElevenLabs TTS service created")
+                logger.info(f"   🎭 Character: {character_name} → {tts_service._current_character}")
+                logger.info(f"   🎙️ Voice ID: {tts_service.VOICE_CONFIGS[tts_service._current_character]['voice_id']}")
+                logger.info("   🚀 Using ElevenLabs streaming API for natural voice")
             except Exception as e:
-                logger.error(f"❌ Failed to create Deepgram TTS service: {e}")
-                # 🛡️ APP STORE SAFETY: Bulletproof OpenAI fallback with safety guards
-                logger.info("🛡️ Falling back to App Store Safe OpenAI TTS...")
+                logger.error(f"❌ Failed to create ElevenLabs TTS service: {e}")
+                # 🛡️ FALLBACK: OpenAI TTS-1 HD
+                logger.info("🛡️ Falling back to OpenAI TTS-1 HD...")
                 try:
                     from livekit.plugins import openai
                     
-                    # 🛡️ SAFETY GUARD: Use most reliable voice configuration
-                    safe_voice = "alloy"  # Most stable OpenAI voice
+                    # Character-specific OpenAI voices
+                    openai_voice = "alloy"  # Default
                     if character_name.lower() == "adina":
-                        safe_voice = "nova"  # Warm, feminine voice
+                        openai_voice = "nova"  # Warm, feminine voice
                     elif character_name.lower() == "raffa":
-                        safe_voice = "onyx"  # Deep, masculine voice
+                        openai_voice = "onyx"  # Deep, masculine voice
                     
-                    # Create bulletproof fallback TTS
-                    deepgram_tts = openai.TTS(voice=safe_voice)
-                    logger.info(f"✅ App Store Safe OpenAI TTS created (voice: {safe_voice})")
-                    logger.info("🛡️ Bulletproof fallback active - zero crash guarantee")
+                    # Create OpenAI TTS-1 HD (high quality)
+                    tts_service = openai.TTS(
+                        voice=openai_voice,
+                        model="tts-1-hd"  # High definition model
+                    )
+                    logger.info(f"✅ OpenAI TTS-1 HD created (voice: {openai_voice})")
+                    logger.info("🛡️ Fallback TTS active - reliable audio guaranteed")
                     
                 except Exception as fallback_e:
                     logger.error(f"❌ OpenAI TTS fallback also failed: {fallback_e}")
-                    # 🛡️ EMERGENCY FALLBACK: Use absolute most basic TTS
-                    logger.error("🛡️ EMERGENCY: Using basic OpenAI TTS with default settings")
+                    # 🛡️ EMERGENCY FALLBACK: Basic OpenAI TTS
+                    logger.error("🛡️ EMERGENCY: Using basic OpenAI TTS")
                     try:
                         from livekit.plugins import openai
-                        deepgram_tts = openai.TTS()  # Use absolute defaults
-                        logger.info("✅ Emergency TTS fallback created - App Store safe")
+                        tts_service = openai.TTS()  # Use absolute defaults
+                        logger.info("✅ Emergency TTS fallback created")
                     except Exception as emergency_e:
                         logger.error(f"❌ Emergency fallback failed: {emergency_e}")
-                        # This should never happen, but if it does, we cannot continue
                         raise Exception("All TTS services failed - cannot proceed")
-            
+
             logger.info(f"🚀 Services initialized for {character_name}")
             try:
-                # Try to log WebSocket voice model if available
-                if hasattr(deepgram_tts, 'VOICE_CONFIGS') and character_name in deepgram_tts.VOICE_CONFIGS:
-                    logger.info(f"   🎤 TTS: Deepgram WebSocket {deepgram_tts.VOICE_CONFIGS[character_name]['model']} (REAL-TIME)")
+                # Log the active TTS service
+                if hasattr(tts_service, 'VOICE_CONFIGS') and hasattr(tts_service, '_current_character'):
+                    # ElevenLabs TTS
+                    voice_id = tts_service.VOICE_CONFIGS[tts_service._current_character]['voice_id']
+                    logger.info(f"   🎙️ TTS: ElevenLabs streaming (voice: {voice_id})")
                 else:
-                    logger.info(f"   🎤 TTS: OpenAI (fallback)")
+                    # OpenAI TTS fallback
+                    logger.info(f"   🎙️ TTS: OpenAI TTS-1 HD (fallback)")
             except:
-                logger.info(f"   🎤 TTS: Service created")
-            logger.info(f"   🎧 STT: Rate-limited Deepgram Nova-3 (prevents 429 errors)")
+                logger.info(f"   🎙️ TTS: Service created")
+            logger.info(f"   🎧 STT: Deepgram Nova-3 (rate-limited)")
             logger.info(f"   🧠 LLM: GPT-4o Mini")
             
-            # Create enhanced agent session with advanced parameters
+            # Create enhanced agent session with streaming TTS
             try:
-                # 🚀 FORCE ULTRA-FAST REAL-TIME PIPELINE (sub-200ms latency)
-                logger.info("🚀 Using REAL-TIME WebSocket pipeline for sub-200ms latency...")
+                logger.info("🚀 Creating real-time session with streaming TTS...")
                 
-                # Use our ultra-optimized traditional pipeline (fastest option)
                 session = AgentSession(
                     vad=silero.VAD.load(
-                        # BLAZING FAST VAD settings for INSTANT response
-                        min_speech_duration=0.02,   # Detect speech INSTANTLY (20ms)
-                        min_silence_duration=0.05,  # BLAZING FAST silence detection (50ms)
+                        min_speech_duration=0.02,   # Quick speech detection
+                        min_silence_duration=0.05,  # Fast silence detection
                     ),
                     stt=stt_service,
                     llm=llm_service,
-                    tts=deepgram_tts,  # 🔧 CRITICAL FIX: Add TTS service to pipeline
-                    # Disable turn_detection to avoid model download issues
-                    # Standard VAD is working perfectly for our use case
-                    # **({"turn_detection": MultilingualModel()} if TURN_DETECTOR_AVAILABLE else {}),
-                    # BLAZING FAST interruption settings for INSTANT response
+                    tts=tts_service,  # ElevenLabs or OpenAI TTS
                     allow_interruptions=True,
-                    min_interruption_duration=0.05,  # BLAZING FAST interruption detection
-                    min_endpointing_delay=0.05,      # BLAZING FAST response initiation
-                    max_endpointing_delay=0.5,       # BLAZING FAST max wait
+                    min_interruption_duration=0.05,
+                    min_endpointing_delay=0.05,
+                    max_endpointing_delay=0.5,
                 )
-                logger.info("✅ REAL-TIME WebSocket session created - maximum speed mode active")
+                logger.info("✅ Real-time session created with streaming TTS")
                 logger.info("🔗 TTS service properly wired into AgentSession pipeline")
+                
+                # Log final configuration
                 try:
-                    if hasattr(deepgram_tts, 'VOICE_CONFIGS') and character_name in deepgram_tts.VOICE_CONFIGS:
-                        logger.info(f"   🎤 TTS: Deepgram WebSocket {deepgram_tts.VOICE_CONFIGS[character_name]['model']} (sub-200ms)")
+                    if hasattr(tts_service, 'VOICE_CONFIGS'):
+                        logger.info(f"   🎙️ TTS: ElevenLabs streaming")
                     else:
-                        logger.info(f"   🎤 TTS: OpenAI (fallback)")
+                        logger.info(f"   🎙️ TTS: OpenAI TTS-1 HD")
                 except:
-                    logger.info(f"   🎤 TTS: Real-time streaming")
+                    logger.info(f"   🎙️ TTS: Streaming service")
                 logger.info(f"   🎧 STT: Deepgram Nova-3 (streaming)")
                 logger.info(f"   🧠 LLM: GPT-4o Mini (optimized)")
-                logger.info(f"   ⚡ Target: Sub-200ms first audio chunk")
+                logger.info(f"   ⚡ Target: Natural voice with streaming")
                 
-                logger.info("✅ REAL-TIME WebSocket session created - maximum speed mode active")
             except Exception as e:
                 logger.error(f"❌ Failed to create enhanced agent session: {e}")
                 # Try with basic parameters if advanced ones fail
@@ -226,7 +231,7 @@ class SpiritualAgentWorker:
                         vad=silero.VAD.load(),
                         stt=stt_service,
                         llm=llm_service,
-                        tts=deepgram_tts,  # 🔧 CRITICAL FIX: Add TTS service to fallback too
+                        tts=tts_service,
                         allow_interruptions=True,
                     )
                     logger.info("✅ Basic agent session created with TTS service")
@@ -285,9 +290,9 @@ class SpiritualAgentWorker:
                 del self.active_sessions[room_name]
             
             # Cleanup TTS service if it's WebSocket Deepgram
-            if 'deepgram_tts' in locals() and hasattr(deepgram_tts, 'aclose'):
+            if 'tts_service' in locals() and hasattr(tts_service, 'aclose'):
                 try:
-                    await deepgram_tts.aclose()
+                    await tts_service.aclose()
                     logger.info("🧹 WebSocket TTS service closed")
                 except Exception as e:
                     logger.warning(f"⚠️ Error closing WebSocket TTS service: {e}")
