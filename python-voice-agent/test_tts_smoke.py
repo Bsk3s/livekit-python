@@ -25,6 +25,14 @@ async def smoke_test():
         tts = LiveKitDeepgramTTS()
         print(f"✅ TTS instance created")
         
+        # Test case-insensitive character mapping
+        print("🎭 Testing character mapping...")
+        print(f"Default character: {tts._current_character}")
+        tts.set_character("adina")  # lowercase like frontend sends
+        print(f"After 'adina': {tts._current_character}")
+        tts.set_character("raffa")  # lowercase like frontend sends
+        print(f"After 'raffa': {tts._current_character}")
+        
         # Test that stream() method exists and is callable
         if hasattr(tts, 'stream') and callable(getattr(tts, 'stream')):
             print("✅ stream() method exists and is callable")

@@ -24,6 +24,14 @@ class LiveKitDeepgramTTS(tts.TTS):
         "Raffa": {"model": "aura-2-orion-en"}
     }
     
+    # Case-insensitive mapping from frontend names to config keys
+    CHARACTER_MAP = {
+        "adina": "Adina",
+        "raffa": "Raffa",
+        "Adina": "Adina",  # Also support capitalized versions
+        "Raffa": "Raffa"
+    }
+    
     def __init__(self):
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -47,12 +55,17 @@ class LiveKitDeepgramTTS(tts.TTS):
 
 
     def set_character(self, character: str):
-        """Set the current character for voice selection"""
-        if character in self.VOICE_CONFIGS:
-            self._current_character = character
-            logger.info(f"🎭 Character set to: {character} (model: {self.VOICE_CONFIGS[character]['model']})")
+        """Set the current character for voice selection (case-insensitive)"""
+        # Map frontend character name to config key
+        mapped_character = self.CHARACTER_MAP.get(character)
+        
+        if mapped_character and mapped_character in self.VOICE_CONFIGS:
+            self._current_character = mapped_character
+            voice_model = self.VOICE_CONFIGS[mapped_character]['model']
+            logger.info(f"🎭 Character set to: {character} → {mapped_character} (model: {voice_model})")
         else:
             logger.warning(f"Unknown character: {character}, keeping current: {self._current_character}")
+            logger.info(f"Available characters: {list(self.CHARACTER_MAP.keys())}")
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create optimized HTTP session with connection pooling"""
