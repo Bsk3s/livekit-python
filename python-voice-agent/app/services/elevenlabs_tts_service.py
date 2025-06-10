@@ -116,29 +116,9 @@ class ElevenLabsTTS(tts.TTS):
     
     def synthesize(self, text: str) -> "ElevenLabsStream":
         """Synthesize text to audio stream (LiveKit TTS interface)"""
-        return ElevenLabsStream(self, text, self._current_character)
-    
-    def stream(self, *, text: str = "") -> "ElevenLabsStreamContext":
-        """Create streaming context (LiveKit streaming TTS interface)
-        
-        Args:
-            text: Optional text to immediately push to the stream.
-                  If provided, enables direct AgentSession integration.
-                  If empty, allows manual push_text() calls.
-        """
-        logger.info(f"🎙️ ElevenLabs TTS.stream() called")
+        logger.info(f"🎙️ ElevenLabs synthesize() called with text: '{text[:50]}...'")
         logger.info(f"🎙️ Character: {self._current_character}")
-        logger.info(f"🎙️ Text provided: {'Yes' if text.strip() else 'No'} ({len(text)} chars)")
-        
-        context = ElevenLabsStreamContext(self, self._current_character)
-        
-        # If text is provided, auto-push it (AgentSession pattern)
-        if text.strip():
-            context.push_text(text)
-            context.end_input()
-            logger.info(f"🎙️ Auto-pushed text to stream: '{text[:50]}...'")
-        
-        return context
+        return ElevenLabsStream(self, text, self._current_character)
     
     async def _synthesize_streaming(self, text: str, character: str, stream_id: str) -> AsyncGenerator[rtc.AudioFrame, None]:
         """Stream synthesis using ElevenLabs streaming API"""
@@ -301,88 +281,6 @@ class ElevenLabsStream:
                 await self._stream.aclose()
             except:
                 pass
-
-
-class ElevenLabsStreamContext:
-    """Streaming context for ElevenLabs TTS compatible with LiveKit's streaming interface"""
-    
-    def __init__(self, tts_instance: ElevenLabsTTS, character: str):
-        self.tts_instance = tts_instance
-        self.character = character
-        self.stream_id = f"elevenlabs_stream_{int(time.time() * 1000)}"
-        self._text_buffer = ""
-        self._audio_generator = None
-        self._is_active = False
-        
-        logger.info(f"🎙️ ElevenLabsStreamContext created for {character} (ID: {self.stream_id})")
-    
-    async def __aenter__(self):
-        """Enter streaming context"""
-        self._is_active = True
-        self.tts_instance._active_streams.add(self.stream_id)
-        logger.info(f"🎙️ ElevenLabsStreamContext entered (ID: {self.stream_id})")
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Exit streaming context"""
-        self._is_active = False
-        self.tts_instance._active_streams.discard(self.stream_id)
-        if self._audio_generator:
-            try:
-                await self._audio_generator.aclose()
-            except:
-                pass
-        logger.info(f"🎙️ ElevenLabsStreamContext exited (ID: {self.stream_id})")
-    
-    def push_text(self, text: str):
-        """Push text to be synthesized"""
-        if text and text.strip():
-            self._text_buffer += text
-            logger.info(f"🎙️ Text pushed to ElevenLabs stream: '{text[:50]}...'")
-    
-    def flush(self):
-        """Flush any remaining text and start synthesis"""
-        if self._text_buffer.strip() and not self._audio_generator:
-            logger.info(f"🎙️ Flushing ElevenLabs stream with text: '{self._text_buffer[:50]}...'")
-            self._audio_generator = self.tts_instance._synthesize_streaming(
-                self._text_buffer, 
-                self.character, 
-                self.stream_id
-            )
-    
-    def __aiter__(self):
-        """Make this an async iterator"""
-        return self
-    
-    async def __anext__(self) -> tts.SynthesizedAudio:
-        """Get next audio frame"""
-        if not self._audio_generator:
-            # If no generator yet, wait for text or create empty generator
-            if self._text_buffer.strip():
-                self.flush()
-            else:
-                raise StopAsyncIteration
-        
-        try:
-            audio_frame = await self._audio_generator.__anext__()
-            return tts.SynthesizedAudio(
-                frame=audio_frame,
-                request_id=self.stream_id,
-            )
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-    
-    def end_input(self):
-        """Signal that no more text will be pushed"""
-        logger.info(f"🎙️ ElevenLabs stream input ended (ID: {self.stream_id})")
-        if self._text_buffer.strip() and not self._audio_generator:
-            self.flush()
-    
-    def interrupt(self):
-        """Interrupt the current stream"""
-        logger.info(f"🛑 Interrupting ElevenLabs stream (ID: {self.stream_id})")
-        self._is_active = False
-        self.tts_instance._active_streams.discard(self.stream_id)
 
 # Verification logging
 logger.info("✅ Loaded ElevenLabs TTS class: %r", ElevenLabsTTS)
