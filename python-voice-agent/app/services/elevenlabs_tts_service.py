@@ -118,11 +118,27 @@ class ElevenLabsTTS(tts.TTS):
         """Synthesize text to audio stream (LiveKit TTS interface)"""
         return ElevenLabsStream(self, text, self._current_character)
     
-    def stream(self) -> "ElevenLabsStreamContext":
-        """Create streaming context (LiveKit streaming TTS interface)"""
-        logger.info(f"🎙️ ElevenLabs TTS.stream() called - creating streaming context")
+    def stream(self, *, text: str = "") -> "ElevenLabsStreamContext":
+        """Create streaming context (LiveKit streaming TTS interface)
+        
+        Args:
+            text: Optional text to immediately push to the stream.
+                  If provided, enables direct AgentSession integration.
+                  If empty, allows manual push_text() calls.
+        """
+        logger.info(f"🎙️ ElevenLabs TTS.stream() called")
         logger.info(f"🎙️ Character: {self._current_character}")
-        return ElevenLabsStreamContext(self, self._current_character)
+        logger.info(f"🎙️ Text provided: {'Yes' if text.strip() else 'No'} ({len(text)} chars)")
+        
+        context = ElevenLabsStreamContext(self, self._current_character)
+        
+        # If text is provided, auto-push it (AgentSession pattern)
+        if text.strip():
+            context.push_text(text)
+            context.end_input()
+            logger.info(f"🎙️ Auto-pushed text to stream: '{text[:50]}...'")
+        
+        return context
     
     async def _synthesize_streaming(self, text: str, character: str, stream_id: str) -> AsyncGenerator[rtc.AudioFrame, None]:
         """Stream synthesis using ElevenLabs streaming API"""
