@@ -15,7 +15,7 @@ from datetime import datetime
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli, llm, stt, tts
 from livekit.agents.llm import ChatContext, ChatMessage
-from livekit.plugins import openai, deepgram, silero
+from livekit.plugins import openai, deepgram, silero, elevenlabs
 from livekit.agents import AgentSession, Agent
 from dotenv import load_dotenv
 
@@ -49,7 +49,8 @@ logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)
 
 # Import our services
 from app.services.llm_service import create_gpt4o_mini
-from app.services.elevenlabs_tts_service import ElevenLabsTTS  # NEW: ElevenLabs TTS
+# REMOVED: from app.services.elevenlabs_tts_service import ElevenLabsTTS  # OLD: Custom implementation
+from livekit.plugins import elevenlabs  # NEW: Official LiveKit ElevenLabs plugin
 from app.characters.character_factory import CharacterFactory
 
 class SpiritualAgentWorker:
@@ -139,11 +140,24 @@ class SpiritualAgentWorker:
             try:
                 # 🎙️ PRIMARY: ELEVENLABS STREAMING TTS
                 logger.info("🎙️ Attempting to create ElevenLabs streaming TTS...")
-                tts_service = ElevenLabsTTS()
-                tts_service.set_character(character_name)
+                
+                # Character-specific voice IDs from environment
+                voice_ids = {
+                    "adina": os.getenv("ADINA_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),  # Rachel fallback
+                    "raffa": os.getenv("RAFFA_VOICE_ID", "29vD33N1CtxCmqQRPOHJ")   # Drew fallback
+                }
+                
+                voice_id = voice_ids.get(character_name.lower(), voice_ids["adina"])
+                
+                tts_service = elevenlabs.TTS(
+                    api_key=os.getenv("ELEVENLABS_API_KEY"),
+                    voice_id=voice_id,
+                    model="eleven_turbo_v2_5"  # Fast streaming model
+                )
+                
                 logger.info(f"✅ ElevenLabs TTS service created")
-                logger.info(f"   🎭 Character: {character_name} → {tts_service._current_character}")
-                logger.info(f"   🎙️ Voice ID: {tts_service.VOICE_CONFIGS[tts_service._current_character]['voice_id']}")
+                logger.info(f"   🎭 Character: {character_name}")
+                logger.info(f"   🎙️ Voice ID: {voice_id}")
                 logger.info("   🚀 Using ElevenLabs streaming API for natural voice")
             except Exception as e:
                 logger.error(f"❌ Failed to create ElevenLabs TTS service: {e}")
@@ -182,9 +196,9 @@ class SpiritualAgentWorker:
             logger.info(f"🚀 Services initialized for {character_name}")
             try:
                 # Log the active TTS service
-                if hasattr(tts_service, 'VOICE_CONFIGS') and hasattr(tts_service, '_current_character'):
-                    # ElevenLabs TTS
-                    voice_id = tts_service.VOICE_CONFIGS[tts_service._current_character]['voice_id']
+                if hasattr(tts_service, 'voice_id'):
+                    # ElevenLabs TTS (official plugin)
+                    voice_id = getattr(tts_service, 'voice_id', 'unknown')
                     logger.info(f"   🎙️ TTS: ElevenLabs streaming (voice: {voice_id})")
                 else:
                     # OpenAI TTS fallback
@@ -216,7 +230,7 @@ class SpiritualAgentWorker:
                 
                 # Log final configuration
                 try:
-                    if hasattr(tts_service, 'VOICE_CONFIGS'):
+                    if hasattr(tts_service, 'voice_id'):
                         logger.info(f"   🎙️ TTS: ElevenLabs streaming")
                     else:
                         logger.info(f"   🎙️ TTS: OpenAI TTS-1 HD")

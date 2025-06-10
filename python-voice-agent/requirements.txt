@@ -10,6 +10,7 @@ livekit-plugins-openai
 livekit-plugins-silero
 livekit-plugins-anthropic
 livekit-plugins-cartesia
+livekit-plugins-elevenlabs
 
 # AI Services - Let pip resolve compatible versions
 openai
