@@ -72,7 +72,8 @@ class SpiritualAgentWorker:
             'LIVEKIT_URL',
             'LIVEKIT_API_KEY', 
             'LIVEKIT_API_SECRET',
-            'OPENAI_API_KEY'  # CHANGED: Only require OpenAI now, not Deepgram
+            'OPENAI_API_KEY',
+            'DEEPGRAM_API_KEY'  # RESTORED: Required for Deepgram STT
         ]
         
         missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -106,16 +107,15 @@ class SpiritualAgentWorker:
             
             # Create services
             try:
-                # 🎧 OPENAI WHISPER STT (replacing Deepgram)
-                logger.info("🎧 Creating OpenAI Whisper STT service...")
-                from livekit.plugins import openai as openai_plugin
-                stt_service = openai_plugin.STT(
-                    model="gpt-4o-transcribe",  # Latest high-quality model
-                    language="en"  # English for spiritual guidance
+                # 🎧 DEEPGRAM STT (Nova-3 model for high accuracy)
+                logger.info("🎧 Creating Deepgram STT service...")
+                stt_service = deepgram.STT(
+                    model="nova-2",  # High-quality Nova model
+                    language="en-US"  # US English for spiritual guidance
                 )
-                logger.info("✅ OpenAI Whisper STT service created")
-                logger.info("   🎧 Model: gpt-4o-transcribe (high accuracy)")
-                logger.info("   🌍 Language: English")
+                logger.info("✅ Deepgram STT service created")
+                logger.info("   🎧 Model: Nova-2 (high accuracy)")
+                logger.info("   🌍 Language: en-US")
             except Exception as e:
                 logger.error(f"❌ Failed to create STT service: {e}")
                 raise
@@ -191,7 +191,7 @@ class SpiritualAgentWorker:
                     logger.info(f"   🎙️ TTS: OpenAI TTS-1 HD (fallback)")
             except:
                 logger.info(f"   🎙️ TTS: Service created")
-            logger.info(f"   🎧 STT: OpenAI Whisper STT")
+            logger.info(f"   🎧 STT: Deepgram STT")
             logger.info(f"   🧠 LLM: GPT-4o Mini")
             
             # Create enhanced agent session with streaming TTS
@@ -222,7 +222,7 @@ class SpiritualAgentWorker:
                         logger.info(f"   🎙️ TTS: OpenAI TTS-1 HD")
                 except:
                     logger.info(f"   🎙️ TTS: Streaming service")
-                logger.info(f"   🎧 STT: OpenAI Whisper STT")
+                logger.info(f"   🎧 STT: Deepgram STT")
                 logger.info(f"   🧠 LLM: GPT-4o Mini (optimized)")
                 logger.info(f"   ⚡ Target: Natural voice with streaming")
                 
