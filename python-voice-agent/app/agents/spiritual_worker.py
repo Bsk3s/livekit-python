@@ -108,7 +108,8 @@ class SpiritualAgentWorker:
             try:
                 # 🎧 OPENAI WHISPER STT (replacing Deepgram)
                 logger.info("🎧 Creating OpenAI Whisper STT service...")
-                stt_service = openai.STT(
+                from livekit.plugins import openai as openai_plugin
+                stt_service = openai_plugin.STT(
                     model="gpt-4o-transcribe",  # Latest high-quality model
                     language="en"  # English for spiritual guidance
                 )
@@ -308,7 +309,7 @@ class SpiritualAgentWorker:
                 except Exception as e:
                     logger.warning(f"⚠️ Error closing STT service: {e}")
             
-            logger.info(f"�� Cleaned up session for room {locals().get('room_name', 'unknown')}")
+            logger.info(f"🧹 Cleaned up session for room {locals().get('room_name', 'unknown')}")
     
     def _extract_character_from_room(self, room_name: str) -> Optional[str]:
         """Extract character name from room name (spiritual-{character}-{session_id})"""
