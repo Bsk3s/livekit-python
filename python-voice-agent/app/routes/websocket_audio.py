@@ -5,9 +5,11 @@ import json
 import logging
 import base64
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import uuid
 import time
+import struct
+import re
 from datetime import datetime
 
 # Import existing services
@@ -18,6 +20,114 @@ from ..characters.character_factory import CharacterFactory
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+def create_wav_header(sample_rate: int = 24000, num_channels: int = 1, bit_depth: int = 16, data_length: int = 0) -> bytes:
+    """Create WAV file header for proper audio format"""
+    # Calculate derived values
+    byte_rate = sample_rate * num_channels * bit_depth // 8
+    block_align = num_channels * bit_depth // 8
+    
+    # WAV header structure
+    header = struct.pack(
+        '<4sI4s4sIHHIIHH4sI',
+        b'RIFF',                    # ChunkID
+        36 + data_length,           # ChunkSize
+        b'WAVE',                    # Format
+        b'fmt ',                    # Subchunk1ID
+        16,                         # Subchunk1Size (PCM)
+        1,                          # AudioFormat (PCM)
+        num_channels,               # NumChannels
+        sample_rate,                # SampleRate
+        byte_rate,                  # ByteRate
+        block_align,                # BlockAlign
+        bit_depth,                  # BitsPerSample
+        b'data',                    # Subchunk2ID
+        data_length                 # Subchunk2Size
+    )
+    return header
+
+def pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, num_channels: int = 1, bit_depth: int = 16) -> bytes:
+    """Convert raw PCM data to WAV format with proper headers"""
+    if not pcm_data:
+        return b''
+    
+    # Create WAV header
+    header = create_wav_header(sample_rate, num_channels, bit_depth, len(pcm_data))
+    
+    # Combine header + data
+    wav_data = header + pcm_data
+    return wav_data
+
+def chunk_ai_response(full_response: str, max_chunk_length: int = 100) -> List[str]:
+    """
+    Split AI response into natural chunks for streaming audio
+    
+    Args:
+        full_response: Complete AI response text
+        max_chunk_length: Target maximum characters per chunk
+        
+    Returns:
+        List of text chunks optimized for TTS streaming
+    """
+    if not full_response or not full_response.strip():
+        return []
+    
+    # Clean the response
+    text = full_response.strip()
+    
+    # Split by sentences first (prioritize natural breaks)
+    sentence_endings = r'[.!?]+\s+'
+    sentences = re.split(sentence_endings, text)
+    
+    chunks = []
+    current_chunk = ""
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        # Add sentence ending back (except for last sentence)
+        if not sentence.endswith(('.', '!', '?')):
+            sentence += '.'
+        
+        # Check if adding this sentence exceeds chunk length
+        if len(current_chunk + ' ' + sentence) <= max_chunk_length or not current_chunk:
+            # Add to current chunk
+            if current_chunk:
+                current_chunk += ' ' + sentence
+            else:
+                current_chunk = sentence
+        else:
+            # Start new chunk
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = sentence
+    
+    # Add remaining chunk
+    if current_chunk:
+        chunks.append(current_chunk)
+    
+    # If no chunks created, split by words as fallback
+    if not chunks and text:
+        words = text.split()
+        current_chunk = ""
+        
+        for word in words:
+            if len(current_chunk + ' ' + word) <= max_chunk_length or not current_chunk:
+                if current_chunk:
+                    current_chunk += ' ' + word
+                else:
+                    current_chunk = word
+            else:
+                chunks.append(current_chunk)
+                current_chunk = word
+        
+        if current_chunk:
+            chunks.append(current_chunk)
+    
+    logger.info(f"📝 Chunked response into {len(chunks)} pieces: {[len(chunk) for chunk in chunks]} chars each")
+    return chunks
 
 class AudioSession:
     """Manages individual audio streaming sessions"""
@@ -141,8 +251,8 @@ class AudioSession:
             logger.error(f"❌ Response generation error: {e}")
             return f"I apologize, I'm having a technical difficulty. Could you please try again?"
     
-    async def synthesize_speech(self, text: str) -> bytes:
-        """Convert text to speech using character voice"""
+    async def synthesize_speech_chunk(self, text: str) -> bytes:
+        """Convert text chunk to speech in WAV format"""
         try:
             # Use TTS service to generate audio
             audio_frames = []
@@ -152,8 +262,11 @@ class AudioSession:
             
             # Combine all audio frames
             if audio_frames:
-                combined_audio = b''.join(audio_frames)
-                return combined_audio
+                combined_pcm = b''.join(audio_frames)
+                # Convert PCM to WAV format
+                wav_data = pcm_to_wav(combined_pcm)
+                logger.debug(f"🎵 Generated {len(wav_data)} bytes WAV for: '{text[:30]}...'")
+                return wav_data
             else:
                 logger.warning(f"⚠️ No audio frames generated for text: {text[:50]}...")
                 return b''
@@ -161,6 +274,80 @@ class AudioSession:
         except Exception as e:
             logger.error(f"❌ Speech synthesis error: {e}")
             return b''
+    
+    async def process_and_stream_response(self, websocket: WebSocket, user_input: str):
+        """Generate AI response and stream audio chunks in real-time"""
+        try:
+            # Generate AI response
+            response_text = await self.generate_response(user_input)
+            
+            # Split response into chunks
+            chunks = chunk_ai_response(response_text, max_chunk_length=120)
+            
+            if not chunks:
+                logger.warning("⚠️ No chunks generated from AI response")
+                return
+            
+            logger.info(f"🎯 Streaming {len(chunks)} audio chunks for response")
+            
+            # Send initial transcription
+            await websocket.send_json({
+                "type": "transcription",
+                "text": user_input,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Send response start notification
+            await websocket.send_json({
+                "type": "response_start",
+                "character": self.character,
+                "total_chunks": len(chunks),
+                "full_text": response_text,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Process and stream each chunk
+            for i, chunk_text in enumerate(chunks):
+                chunk_start_time = time.time()
+                
+                # Generate TTS for this chunk
+                wav_audio = await self.synthesize_speech_chunk(chunk_text)
+                
+                if wav_audio:
+                    chunk_duration = (time.time() - chunk_start_time) * 1000
+                    
+                    # Send audio chunk immediately
+                    await websocket.send_json({
+                        "type": "audio_chunk",
+                        "chunk_id": i + 1,
+                        "total_chunks": len(chunks),
+                        "is_final": i == len(chunks) - 1,
+                        "text": chunk_text,
+                        "audio": base64.b64encode(wav_audio).decode('utf-8'),
+                        "character": self.character,
+                        "generation_time_ms": round(chunk_duration),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                    logger.info(f"🎵 Sent chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars, {chunk_duration:.0f}ms)")
+                else:
+                    logger.error(f"❌ Failed to generate audio for chunk {i+1}: '{chunk_text[:30]}...'")
+            
+            # Send completion notification
+            await websocket.send_json({
+                "type": "response_complete",
+                "character": self.character,
+                "chunks_sent": len(chunks),
+                "timestamp": datetime.now().isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ Error in streaming response: {e}")
+            await websocket.send_json({
+                "type": "error",
+                "message": "Failed to stream response",
+                "timestamp": datetime.now().isoformat()
+            })
     
     async def cleanup(self):
         """Clean up session resources"""
@@ -211,27 +398,8 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                         transcription = await session.process_audio_chunk(audio_data)
                         
                         if transcription:
-                            # Generate AI response
-                            response_text = await session.generate_response(transcription)
-                            
-                            # Convert to speech
-                            audio_response = await session.synthesize_speech(response_text)
-                            
-                            # Send transcription and audio response
-                            await websocket.send_json({
-                                "type": "transcription",
-                                "text": transcription,
-                                "timestamp": datetime.now().isoformat()
-                            })
-                            
-                            if audio_response:
-                                await websocket.send_json({
-                                    "type": "audio_response",
-                                    "text": response_text,
-                                    "audio": base64.b64encode(audio_response).decode('utf-8'),
-                                    "character": session.character,
-                                    "timestamp": datetime.now().isoformat()
-                                })
+                            # Process and stream response in chunks
+                            await session.process_and_stream_response(websocket, transcription)
                             
             except asyncio.TimeoutError:
                 # Send keepalive ping
@@ -304,17 +472,11 @@ async def handle_json_message(websocket: WebSocket, session: Optional[AudioSessi
                     })
                     
         elif message_type == "text_message":
-            # Handle text-only message (no audio)
+            # Handle text-only message (no audio) - stream chunks too
             if session:
                 user_text = message.get("text", "")
                 if user_text.strip():
-                    response_text = await session.generate_response(user_text)
-                    await websocket.send_json({
-                        "type": "text_response",
-                        "text": response_text,
-                        "character": session.character,
-                        "timestamp": datetime.now().isoformat()
-                    })
+                    await session.process_and_stream_response(websocket, user_text)
                     
         elif message_type == "ping":
             await websocket.send_json({"type": "pong"})
