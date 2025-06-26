@@ -1,4 +1,5 @@
 from typing import AsyncGenerator, Optional
+from abc import abstractmethod
 from ...services.base_service import BaseService
 
 class BaseSTTService(BaseService):
