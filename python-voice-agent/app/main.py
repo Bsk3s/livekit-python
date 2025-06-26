@@ -17,7 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Now import routes after logging is configured
-from app.routes import token
+from app.routes import token, websocket_audio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -81,6 +81,7 @@ async def root():
 
 # Include routers
 app.include_router(token.router, prefix="/api", tags=["Authentication"])
+app.include_router(websocket_audio.router, tags=["WebSocket Audio"])
 
 if __name__ == "__main__":
     import uvicorn
