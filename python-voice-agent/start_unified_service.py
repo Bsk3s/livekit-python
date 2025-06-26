@@ -11,7 +11,6 @@ import signal
 import threading
 import time
 from pathlib import Path
-import uvicorn
 from multiprocessing import Process
 
 # Add the current directory to the Python path since we're already in python-voice-agent
@@ -27,14 +26,19 @@ def start_token_api():
         # Get port from environment (Render sets this)
         port = int(os.getenv('PORT', 8000))
         
-        # Start uvicorn server
-        uvicorn.run(
-            app,
-            host="0.0.0.0",
-            port=port,
-            log_level="info",
-            access_log=True
-        )
+        # Use Python module approach to run uvicorn
+        import subprocess
+        result = subprocess.run([
+            sys.executable, "-m", "uvicorn", 
+            "app.main:app",
+            "--host", "0.0.0.0",
+            "--port", str(port),
+            "--log-level", "info"
+        ])
+        
+        if result.returncode != 0:
+            print(f"❌ Token API exited with code {result.returncode}")
+            
     except Exception as e:
         print(f"❌ Token API failed to start: {e}")
         sys.exit(1)
