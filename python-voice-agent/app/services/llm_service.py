@@ -23,9 +23,8 @@ class LiveKitOpenAIAdapter(llm.LLM):
     
     async def chat(
         self,
+        *,
         chat_ctx: llm.ChatContext,
-        conn_options: llm.LLMOptions = llm.LLMOptions(),
-        fnc_ctx: llm.FunctionContext | None = None,
     ) -> llm.LLMStream:
         """Chat with the language model using LiveKit's interface"""
         await self._ensure_initialized()
