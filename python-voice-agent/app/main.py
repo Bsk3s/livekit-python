@@ -47,12 +47,13 @@ app.add_middleware(
         "*"  # Allow all for now - restrict in production
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "HEAD", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Health check endpoint for Render
+# Health check endpoint for Render - supports both GET and HEAD
 @app.get("/health")
+@app.head("/health")
 async def health_check():
     """Health check endpoint for deployment monitoring"""
     return {
@@ -60,19 +61,29 @@ async def health_check():
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "service": "spiritual-guidance-api",
         "version": "1.0.0",
-        "environment": os.getenv("ENVIRONMENT", "development")
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        "components": {
+            "websocket": "available",
+            "llm": "gpt-4o-mini",
+            "stt": "deepgram",
+            "tts": "openai",
+            "characters": ["adina", "raffa"]
+        }
     }
 
-# Root endpoint
+# Root endpoint - supports both GET and HEAD
 @app.get("/")
+@app.head("/")
 async def root():
     """Root endpoint with API information"""
     return {
         "message": "Spiritual Guidance Voice Agent API",
         "version": "1.0.0",
+        "status": "healthy",
         "characters": ["adina", "raffa"],
         "endpoints": {
             "health": "/health",
+            "websocket": "/ws/audio",
             "token": "/api/spiritual-token",
             "legacy_token": "/api/createToken"
         },
