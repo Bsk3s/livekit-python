@@ -15,7 +15,7 @@ from datetime import datetime
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli, llm, stt, tts
 from livekit.agents.llm import ChatContext, ChatMessage
-from livekit.plugins import openai, deepgram, silero, elevenlabs
+from livekit.plugins import openai, deepgram, silero
 from livekit.agents import AgentSession, Agent
 from dotenv import load_dotenv
 
@@ -49,8 +49,6 @@ logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)
 
 # Import our services
 from app.services.llm_service import create_gpt4o_mini
-# REMOVED: from app.services.elevenlabs_tts_service import ElevenLabsTTS  # OLD: Custom implementation
-from livekit.plugins import elevenlabs  # NEW: Official LiveKit ElevenLabs plugin
 from app.characters.character_factory import CharacterFactory
 
 class SpiritualAgentWorker:
@@ -138,73 +136,37 @@ class SpiritualAgentWorker:
                     raise
             
             try:
-                # 🎙️ PRIMARY: ELEVENLABS STREAMING TTS
-                logger.info("🎙️ Attempting to create ElevenLabs streaming TTS...")
+                # 🎙️ PRIMARY: OPENAI TTS-1 HD
+                logger.info("🎙️ Creating OpenAI TTS service...")
                 
-                # Character-specific voice IDs from environment
-                voice_ids = {
-                    "adina": os.getenv("ADINA_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),  # Rachel fallback
-                    "raffa": os.getenv("RAFFA_VOICE_ID", "29vD33N1CtxCmqQRPOHJ")   # Drew fallback
-                }
+                # Character-specific OpenAI voices
+                openai_voice = "alloy"  # Default
+                if character_name.lower() == "adina":
+                    openai_voice = "nova"  # Warm, feminine voice
+                elif character_name.lower() == "raffa":
+                    openai_voice = "onyx"  # Deep, masculine voice
                 
-                voice_id = voice_ids.get(character_name.lower(), voice_ids["adina"])
-                
-                tts_service = elevenlabs.TTS(
-                    api_key=os.getenv("ELEVENLABS_API_KEY"),
-                    voice_id=voice_id,
-                    model="eleven_turbo_v2_5"  # Fast streaming model
+                # Create OpenAI TTS-1 HD (high quality)
+                tts_service = openai.TTS(
+                    voice=openai_voice,
+                    model="tts-1-hd"  # High definition model
                 )
-                
-                logger.info(f"✅ ElevenLabs TTS service created")
-                logger.info(f"   🎭 Character: {character_name}")
-                logger.info(f"   🎙️ Voice ID: {voice_id}")
-                logger.info("   🚀 Using ElevenLabs streaming API for natural voice")
+                logger.info(f"✅ OpenAI TTS-1 HD created (voice: {openai_voice})")
+                logger.info("🎙️ Using reliable OpenAI TTS for high-quality audio")
+                    
             except Exception as e:
-                logger.error(f"❌ Failed to create ElevenLabs TTS service: {e}")
-                # 🛡️ FALLBACK: OpenAI TTS-1 HD
-                logger.info("🛡️ Falling back to OpenAI TTS-1 HD...")
+                logger.error(f"❌ Failed to create OpenAI TTS service: {e}")
+                # 🛡️ EMERGENCY FALLBACK: Basic OpenAI TTS
+                logger.info("🛡️ EMERGENCY: Using basic OpenAI TTS")
                 try:
-                    from livekit.plugins import openai
-                    
-                    # Character-specific OpenAI voices
-                    openai_voice = "alloy"  # Default
-                    if character_name.lower() == "adina":
-                        openai_voice = "nova"  # Warm, feminine voice
-                    elif character_name.lower() == "raffa":
-                        openai_voice = "onyx"  # Deep, masculine voice
-                    
-                    # Create OpenAI TTS-1 HD (high quality)
-                    tts_service = openai.TTS(
-                        voice=openai_voice,
-                        model="tts-1-hd"  # High definition model
-                    )
-                    logger.info(f"✅ OpenAI TTS-1 HD created (voice: {openai_voice})")
-                    logger.info("🛡️ Fallback TTS active - reliable audio guaranteed")
-                    
-                except Exception as fallback_e:
-                    logger.error(f"❌ OpenAI TTS fallback also failed: {fallback_e}")
-                    # 🛡️ EMERGENCY FALLBACK: Basic OpenAI TTS
-                    logger.error("🛡️ EMERGENCY: Using basic OpenAI TTS")
-                    try:
-                        from livekit.plugins import openai
-                        tts_service = openai.TTS()  # Use absolute defaults
-                        logger.info("✅ Emergency TTS fallback created")
-                    except Exception as emergency_e:
-                        logger.error(f"❌ Emergency fallback failed: {emergency_e}")
-                        raise Exception("All TTS services failed - cannot proceed")
+                    tts_service = openai.TTS()  # Use absolute defaults
+                    logger.info("✅ Emergency TTS fallback created")
+                except Exception as emergency_e:
+                    logger.error(f"❌ Emergency fallback failed: {emergency_e}")
+                    raise Exception("All TTS services failed - cannot proceed")
 
             logger.info(f"🚀 Services initialized for {character_name}")
-            try:
-                # Log the active TTS service
-                if hasattr(tts_service, 'voice_id'):
-                    # ElevenLabs TTS (official plugin)
-                    voice_id = getattr(tts_service, 'voice_id', 'unknown')
-                    logger.info(f"   🎙️ TTS: ElevenLabs streaming (voice: {voice_id})")
-                else:
-                    # OpenAI TTS fallback
-                    logger.info(f"   🎙️ TTS: OpenAI TTS-1 HD (fallback)")
-            except:
-                logger.info(f"   🎙️ TTS: Service created")
+            logger.info(f"   🎙️ TTS: OpenAI TTS (voice: {openai_voice})")
             logger.info(f"   🎧 STT: Deepgram STT")
             logger.info(f"   🧠 LLM: GPT-4o Mini")
             

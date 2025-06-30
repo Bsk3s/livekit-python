@@ -21,7 +21,7 @@ from ..characters.character_factory import CharacterFactory
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-def create_wav_header(sample_rate: int = 24000, num_channels: int = 1, bit_depth: int = 16, data_length: int = 0) -> bytes:
+def create_wav_header(sample_rate: int = 16000, num_channels: int = 1, bit_depth: int = 16, data_length: int = 0) -> bytes:
     """Create WAV file header for proper audio format"""
     # Calculate derived values
     byte_rate = sample_rate * num_channels * bit_depth // 8
@@ -46,7 +46,7 @@ def create_wav_header(sample_rate: int = 24000, num_channels: int = 1, bit_depth
     )
     return header
 
-def pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, num_channels: int = 1, bit_depth: int = 16) -> bytes:
+def pcm_to_wav(pcm_data: bytes, sample_rate: int = 16000, num_channels: int = 1, bit_depth: int = 16) -> bytes:
     """Convert raw PCM data to WAV format with proper headers"""
     if not pcm_data:
         return b''
@@ -170,11 +170,21 @@ class AudioSession:
             logger.error(f"❌ Failed to initialize session {self.session_id}: {e}")
             raise
     
-    async def process_audio_chunk(self, audio_data: bytes) -> Optional[str]:
+    async def process_audio_chunk(self, audio_data: bytes, websocket: WebSocket) -> Optional[str]:
         """Process incoming audio chunk and return transcription if available"""
         try:
             # Add to buffer
             self._audio_buffer.extend(audio_data)
+            
+            # Send speech detection event immediately when audio is received
+            if len(audio_data) > 0 and not self._processing_audio:
+                self._processing_audio = True
+                await websocket.send_json({
+                    "type": "speech_detected",
+                    "confidence": 0.8,
+                    "timestamp": datetime.now().isoformat()
+                })
+                logger.info("🗣️ BACKEND HEARD YOU: Speech detected")
             
             # Process when buffer has enough data (e.g., 1 second worth)
             if len(self._audio_buffer) >= 32000:  # ~1 second at 16kHz 16-bit
@@ -184,18 +194,55 @@ class AudioSession:
                 # Clear buffer
                 self._audio_buffer.clear()
                 
+                # Reset processing flag for next audio chunk
+                self._processing_audio = False
+                
                 # Convert raw PCM to WAV format for Deepgram
                 wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
+                
+                # Send transcription start event
+                await websocket.send_json({
+                    "type": "transcription_partial",
+                    "text": "",
+                    "message": "Processing your speech...",
+                    "timestamp": datetime.now().isoformat()
+                })
+                logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
                 
                 # Transcribe using Direct Deepgram service
                 transcription = await self.stt_service.transcribe_audio_bytes(wav_audio)
                 
                 if transcription and transcription.strip():
+                    # Send complete transcription
+                    await websocket.send_json({
+                        "type": "transcription_complete",
+                        "text": transcription.strip(),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
                     logger.info(f"👤 User ({self.character}): '{transcription}'")
                     return transcription.strip()
+                else:
+                    # Send empty transcription result
+                    await websocket.send_json({
+                        "type": "transcription_complete",
+                        "text": "",
+                        "message": "No speech detected in audio",
+                        "timestamp": datetime.now().isoformat()
+                    })
                     
         except Exception as e:
             logger.error(f"❌ Audio processing error in session {self.session_id}: {e}")
+            # Send error event to frontend
+            try:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Audio processing failed",
+                    "details": str(e),
+                    "timestamp": datetime.now().isoformat()
+                })
+            except:
+                pass  # Don't fail on websocket send error
             
         return None
     
@@ -219,8 +266,18 @@ class AudioSession:
             
             # Generate response using LLM
             from livekit.agents import llm
-            chat_ctx = llm.ChatContext(messages=messages)
             
+            # Create ChatContext with proper message format
+            chat_messages = []
+            for msg in messages:
+                if msg["role"] == "system":
+                    chat_messages.append(llm.ChatMessage.create(text=msg["content"], role="system"))
+                elif msg["role"] == "user":
+                    chat_messages.append(llm.ChatMessage.create(text=msg["content"], role="user"))
+                elif msg["role"] == "assistant":
+                    chat_messages.append(llm.ChatMessage.create(text=msg["content"], role="assistant"))
+            
+            chat_ctx = llm.ChatContext(messages=chat_messages)
             response_stream = await self.llm_service.chat(chat_ctx=chat_ctx)
             
             # Collect full response
@@ -243,30 +300,90 @@ class AudioSession:
     async def synthesize_speech_chunk(self, text: str) -> bytes:
         """Convert text chunk to speech in WAV format"""
         try:
+            logger.info(f"🎤 Starting TTS synthesis for: '{text[:50]}...'")
+            
             # Use TTS service to generate audio
             audio_frames = []
-            async for frame in self.tts_service.synthesize_streaming(text, self.character):
-                if hasattr(frame, 'data'):
-                    audio_frames.append(frame.data.tobytes())
+            frame_count = 0
+            sample_rate = 48000  # Default OpenAI TTS sample rate
+            
+            async for synth_audio in self.tts_service.synthesize_streaming(text, self.character):
+                frame_count += 1
+                logger.debug(f"🎵 Received TTS frame {frame_count}: {type(synth_audio)}")
+                
+                # Extract audio frame
+                audio_frame = synth_audio.frame
+                sample_rate = audio_frame.sample_rate  # Get actual sample rate
+                
+                # Extract audio data properly
+                if hasattr(audio_frame, 'data'):
+                    audio_data = audio_frame.data.tobytes()
+                    audio_frames.append(audio_data)
+                    logger.debug(f"🎵 Added frame data: {len(audio_data)} bytes at {sample_rate}Hz")
+                else:
+                    logger.warning(f"⚠️ Audio frame has no data attribute: {type(audio_frame)}")
+            
+            logger.info(f"🎵 TTS completed: {frame_count} frames, {len(audio_frames)} audio chunks at {sample_rate}Hz")
             
             # Combine all audio frames
             if audio_frames:
                 combined_pcm = b''.join(audio_frames)
-                # Convert PCM to WAV format
-                wav_data = pcm_to_wav(combined_pcm)
-                logger.debug(f"🎵 Generated {len(wav_data)} bytes WAV for: '{text[:30]}...'")
+                logger.info(f"🎵 Combined PCM: {len(combined_pcm)} bytes")
+                
+                # Convert PCM to WAV format with correct sample rate
+                wav_data = pcm_to_wav(combined_pcm, sample_rate=sample_rate, num_channels=1, bit_depth=16)
+                logger.info(f"🎵 Generated {len(wav_data)} bytes WAV for: '{text[:30]}...'")
                 return wav_data
             else:
                 logger.warning(f"⚠️ No audio frames generated for text: {text[:50]}...")
-                return b''
+                logger.warning(f"⚠️ Frame count was: {frame_count}")
+                
+                # Try fallback approach - direct OpenAI API
+                return await self._fallback_tts_synthesis(text)
                 
         except Exception as e:
             logger.error(f"❌ Speech synthesis error: {e}")
+            logger.error(f"❌ Error type: {type(e)}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            
+            # Try fallback approach
+            return await self._fallback_tts_synthesis(text)
+    
+    async def _fallback_tts_synthesis(self, text: str) -> bytes:
+        """Fallback TTS synthesis using direct OpenAI API"""
+        try:
+            logger.info(f"🔄 Trying fallback TTS for: '{text[:30]}...'")
+            
+            # Direct OpenAI TTS call
+            import openai
+            response = await openai.AsyncOpenAI().audio.speech.create(
+                model="tts-1",
+                voice="nova" if self.character == "adina" else "onyx",
+                input=text,
+                response_format="wav"
+            )
+            
+            audio_data = await response.aread()
+            logger.info(f"🎵 Fallback TTS generated: {len(audio_data)} bytes")
+            return audio_data
+            
+        except Exception as e:
+            logger.error(f"❌ Fallback TTS also failed: {e}")
             return b''
     
     async def process_and_stream_response(self, websocket: WebSocket, user_input: str):
         """Generate AI response and stream audio chunks in real-time"""
         try:
+            # Send processing started event
+            await websocket.send_json({
+                "type": "processing_started",
+                "character": self.character,
+                "message": f"{self.character.title()} is thinking...",
+                "timestamp": datetime.now().isoformat()
+            })
+            logger.info(f"🤖 Processing started with {self.character}")
+            
             # Generate AI response
             response_text = await self.generate_response(user_input)
             
@@ -275,18 +392,16 @@ class AudioSession:
             
             if not chunks:
                 logger.warning("⚠️ No chunks generated from AI response")
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Failed to generate response chunks",
+                    "timestamp": datetime.now().isoformat()
+                })
                 return
             
             logger.info(f"🎯 Streaming {len(chunks)} audio chunks for response")
             
-            # Send initial transcription
-            await websocket.send_json({
-                "type": "transcription",
-                "text": user_input,
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            # Send response start notification
+            # Send response start notification with full details
             await websocket.send_json({
                 "type": "response_start",
                 "character": self.character,
@@ -384,7 +499,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                     # Handle binary audio data
                     if session and session.stt_service:
                         audio_data = data["bytes"]
-                        transcription = await session.process_audio_chunk(audio_data)
+                        transcription = await session.process_audio_chunk(audio_data, websocket)
                         
                         if transcription:
                             # Process and stream response in chunks
@@ -459,6 +574,40 @@ async def handle_json_message(websocket: WebSocket, session: Optional[AudioSessi
                         "message": f"Switched to {new_character.title()}",
                         "timestamp": datetime.now().isoformat()
                     })
+                    
+        elif message_type == "audio":
+            # Handle JSON audio message with base64 encoded audio data
+            if session and session.stt_service:
+                try:
+                    audio_base64 = message.get("audio", "")
+                    if audio_base64:
+                        # Decode base64 audio data
+                        audio_data = base64.b64decode(audio_base64)
+                        logger.debug(f"🎤 Received {len(audio_data)} bytes of audio data via JSON")
+                        
+                        # Process audio chunk and get transcription
+                        transcription = await session.process_audio_chunk(audio_data, websocket)
+                        
+                        if transcription:
+                            # Process and stream response in chunks
+                            await session.process_and_stream_response(websocket, transcription)
+                    else:
+                        logger.warning("⚠️ Empty audio data in JSON message")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error processing JSON audio message: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Failed to process audio data",
+                        "details": str(e),
+                        "timestamp": datetime.now().isoformat()
+                    })
+            else:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Session not initialized or STT service unavailable",
+                    "timestamp": datetime.now().isoformat()
+                })
                     
         elif message_type == "text_message":
             # Handle text-only message (no audio) - stream chunks too
