@@ -267,24 +267,17 @@ class AudioSession:
             # Generate response using LLM
             from livekit.agents import llm
             
-            # Create ChatContext with proper message format
-            chat_messages = []
+            # Create ChatContext with proper message format  
+            chat_ctx = llm.ChatContext()
             for msg in messages:
-                if msg["role"] == "system":
-                    chat_messages.append(llm.ChatMessage.create(text=msg["content"], role="system"))
-                elif msg["role"] == "user":
-                    chat_messages.append(llm.ChatMessage.create(text=msg["content"], role="user"))
-                elif msg["role"] == "assistant":
-                    chat_messages.append(llm.ChatMessage.create(text=msg["content"], role="assistant"))
-            
-            chat_ctx = llm.ChatContext(messages=chat_messages)
+                chat_ctx.add_message(role=msg["role"], content=msg["content"])
             response_stream = await self.llm_service.chat(chat_ctx=chat_ctx)
             
             # Collect full response
             response_text = ""
             async for chunk in response_stream:
-                if hasattr(chunk, 'content') and chunk.content:
-                    response_text += chunk.content
+                if hasattr(chunk, 'choices') and chunk.choices and chunk.choices[0].delta.content:
+                    response_text += chunk.choices[0].delta.content
             
             # Update conversation history
             self.conversation_history.append({"role": "user", "content": user_input})
@@ -295,6 +288,9 @@ class AudioSession:
             
         except Exception as e:
             logger.error(f"❌ Response generation error: {e}")
+            logger.error(f"❌ Error type: {type(e)}")
+            import traceback
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
             return f"I apologize, I'm having a technical difficulty. Could you please try again?"
     
     async def synthesize_speech_chunk(self, text: str) -> bytes:
