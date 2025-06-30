@@ -176,18 +176,42 @@ class AudioSession:
             # Add to buffer
             self._audio_buffer.extend(audio_data)
             
-            # Send speech detection event immediately when audio is received
-            if len(audio_data) > 0 and not self._processing_audio:
+            # Calculate audio energy to detect actual speech vs silence/noise
+            audio_energy = self._calculate_audio_energy(audio_data)
+            energy_threshold = 300  # Lowered for real-world audio sensitivity
+            
+            # Log audio energy for debugging (every 10th chunk to avoid spam)
+            if len(self._audio_buffer) % 32000 == 0:  # Log every ~1 second
+                logger.info(f"🎤 Audio energy: {audio_energy:.1f} (threshold: {energy_threshold})")
+            
+            # Only trigger speech detection for significant audio energy
+            if audio_energy > energy_threshold and not self._processing_audio:
                 self._processing_audio = True
                 await websocket.send_json({
                     "type": "speech_detected",
-                    "confidence": 0.8,
+                    "confidence": min(0.9, audio_energy / 2000),  # Dynamic confidence
+                    "energy": audio_energy,
                     "timestamp": datetime.now().isoformat()
                 })
-                logger.info("🗣️ BACKEND HEARD YOU: Speech detected")
+                logger.info(f"🗣️ BACKEND HEARD YOU: Speech detected (energy: {audio_energy})")
             
-            # Process when buffer has enough data (e.g., 1 second worth)
-            if len(self._audio_buffer) >= 32000:  # ~1 second at 16kHz 16-bit
+            # Smart buffer processing - process when we have enough data AND speech was detected
+            buffer_size = len(self._audio_buffer)
+            min_buffer_size = 16000  # ~0.5 seconds at 16kHz 16-bit
+            max_buffer_size = 64000  # ~2 seconds at 16kHz 16-bit
+            
+            should_process = False
+            
+            if self._processing_audio and buffer_size >= min_buffer_size:
+                # Process if we detected speech and have minimum data
+                should_process = True
+                process_reason = f"speech detected + {buffer_size} bytes"
+            elif buffer_size >= max_buffer_size:
+                # Process if buffer is getting too large (prevent memory issues)
+                should_process = True
+                process_reason = f"max buffer reached: {buffer_size} bytes"
+            
+            if should_process:
                 # Get raw audio bytes from buffer
                 audio_bytes = bytes(self._audio_buffer)
                 
@@ -197,6 +221,8 @@ class AudioSession:
                 # Reset processing flag for next audio chunk
                 self._processing_audio = False
                 
+                logger.info(f"📝 Processing audio buffer: {process_reason}")
+                
                 # Convert raw PCM to WAV format for Deepgram
                 wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
                 
@@ -205,6 +231,7 @@ class AudioSession:
                     "type": "transcription_partial",
                     "text": "",
                     "message": "Processing your speech...",
+                    "buffer_size": len(audio_bytes),
                     "timestamp": datetime.now().isoformat()
                 })
                 logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
@@ -217,6 +244,7 @@ class AudioSession:
                     await websocket.send_json({
                         "type": "transcription_complete",
                         "text": transcription.strip(),
+                        "buffer_size": len(audio_bytes),
                         "timestamp": datetime.now().isoformat()
                     })
                     logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
@@ -228,8 +256,10 @@ class AudioSession:
                         "type": "transcription_complete",
                         "text": "",
                         "message": "No speech detected in audio",
+                        "buffer_size": len(audio_bytes),
                         "timestamp": datetime.now().isoformat()
                     })
+                    logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
                     
         except Exception as e:
             logger.error(f"❌ Audio processing error in session {self.session_id}: {e}")
@@ -245,6 +275,29 @@ class AudioSession:
                 pass  # Don't fail on websocket send error
             
         return None
+    
+    def _calculate_audio_energy(self, audio_data: bytes) -> float:
+        """Calculate the energy/volume of audio data to detect speech vs silence"""
+        try:
+            if len(audio_data) < 2:
+                return 0.0
+            
+            import struct
+            import math
+            
+            # Convert bytes to 16-bit signed integers
+            sample_count = len(audio_data) // 2
+            samples = struct.unpack(f'<{sample_count}h', audio_data[:sample_count * 2])
+            
+            # Calculate RMS (Root Mean Square) energy
+            sum_squares = sum(sample * sample for sample in samples)
+            rms = math.sqrt(sum_squares / sample_count) if sample_count > 0 else 0.0
+            
+            return rms
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error calculating audio energy: {e}")
+            return 0.0
     
     async def generate_response(self, user_input: str) -> str:
         """Generate AI response using character personality"""
