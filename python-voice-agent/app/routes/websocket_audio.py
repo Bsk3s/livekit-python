@@ -13,7 +13,7 @@ import re
 from datetime import datetime
 
 # Import existing services
-from ..services.stt.implementations.deepgram import DeepgramSTTService
+from ..services.stt.implementations.direct_deepgram import DirectDeepgramSTTService
 from ..services.llm_service import create_gpt4o_mini
 from ..services.openai_tts_service import OpenAITTSService
 from ..characters.character_factory import CharacterFactory
@@ -148,8 +148,8 @@ class AudioSession:
     async def initialize(self):
         """Initialize all services for this session"""
         try:
-            # STT Service - Deepgram
-            self.stt_service = DeepgramSTTService({
+            # STT Service - Direct Deepgram (no LiveKit context needed)
+            self.stt_service = DirectDeepgramSTTService({
                 "model": "nova-2",
                 "language": "en-US",
                 "punctuate": True,
@@ -178,32 +178,21 @@ class AudioSession:
             
             # Process when buffer has enough data (e.g., 1 second worth)
             if len(self._audio_buffer) >= 32000:  # ~1 second at 16kHz 16-bit
-                # Convert buffer to numpy array
-                audio_array = np.frombuffer(self._audio_buffer, dtype=np.int16).astype(np.float32) / 32768.0
+                # Get raw audio bytes from buffer
+                audio_bytes = bytes(self._audio_buffer)
                 
                 # Clear buffer
                 self._audio_buffer.clear()
                 
-                # Use LiveKit Deepgram plugin directly for transcription
-                from livekit.agents import stt
+                # Convert raw PCM to WAV format for Deepgram
+                wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
                 
-                # Create audio frame
-                from livekit import rtc
-                audio_frame = rtc.AudioFrame(
-                    data=audio_array,
-                    sample_rate=16000,
-                    num_channels=1,
-                    samples_per_channel=len(audio_array)
-                )
+                # Transcribe using Direct Deepgram service
+                transcription = await self.stt_service.transcribe_audio_bytes(wav_audio)
                 
-                # Transcribe using the client
-                if hasattr(self.stt_service, '_client'):
-                    result = await self.stt_service._client.recognize(audio_frame)
-                    
-                    if result and hasattr(result, 'text') and result.text.strip():
-                        transcription = result.text.strip()
-                        logger.info(f"👤 User ({self.character}): '{transcription}'")
-                        return transcription
+                if transcription and transcription.strip():
+                    logger.info(f"👤 User ({self.character}): '{transcription}'")
+                    return transcription.strip()
                     
         except Exception as e:
             logger.error(f"❌ Audio processing error in session {self.session_id}: {e}")
@@ -353,7 +342,7 @@ class AudioSession:
         """Clean up session resources"""
         try:
             if self.stt_service:
-                await self.stt_service.aclose()
+                await self.stt_service.shutdown()
             logger.info(f"🧹 Session {self.session_id} cleaned up")
         except Exception as e:
             logger.warning(f"⚠️ Cleanup error for session {self.session_id}: {e}")
