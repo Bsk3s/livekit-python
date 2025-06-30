@@ -12,9 +12,9 @@ livekit-plugins-anthropic
 livekit-plugins-cartesia
 livekit-plugins-elevenlabs
 
-# AI Services - Let pip resolve compatible versions
-openai
-deepgram-sdk
+# AI Services - Compatible versions to fix typing.Union error
+openai>=1.0.0
+deepgram-sdk>=3.2.0,<4.0.0
 
 # Audio Processing
 numpy
