@@ -145,6 +145,14 @@ class AudioSession:
         self._audio_buffer = bytearray()
         self._processing_audio = False
         
+        # Enhanced voice activity detection
+        self._recent_energy_levels = []  # Track recent energy levels
+        self._energy_threshold = 800    # Increased from 300 to reduce false positives
+        self._min_sustained_chunks = 3  # Require 3 consecutive high-energy chunks
+        self._max_energy_history = 10   # Keep last 10 energy measurements
+        self._last_speech_time = 0      # Track when we last detected speech
+        self._speech_cooldown = 2.0     # Seconds to wait after speech before resetting
+        
     async def initialize(self):
         """Initialize all services for this session"""
         try:
@@ -173,27 +181,48 @@ class AudioSession:
     async def process_audio_chunk(self, audio_data: bytes, websocket: WebSocket) -> Optional[str]:
         """Process incoming audio chunk and return transcription if available"""
         try:
+            # Check WebSocket connection state before processing
+            if websocket.client_state != WebSocketState.CONNECTED:
+                logger.warning(f"⚠️ WebSocket not connected, skipping audio processing")
+                return None
+            
             # Add to buffer
             self._audio_buffer.extend(audio_data)
             
             # Calculate audio energy to detect actual speech vs silence/noise
             audio_energy = self._calculate_audio_energy(audio_data)
-            energy_threshold = 300  # Lowered for real-world audio sensitivity
+            current_time = time.time()
             
-            # Log audio energy for debugging (every 10th chunk to avoid spam)
+            # Update energy history for sustained speech detection
+            self._recent_energy_levels.append(audio_energy)
+            if len(self._recent_energy_levels) > self._max_energy_history:
+                self._recent_energy_levels.pop(0)
+            
+            # Log audio energy for debugging (every 32KB to avoid spam)
             if len(self._audio_buffer) % 32000 == 0:  # Log every ~1 second
-                logger.info(f"🎤 Audio energy: {audio_energy:.1f} (threshold: {energy_threshold})")
+                avg_energy = sum(self._recent_energy_levels) / len(self._recent_energy_levels)
+                logger.info(f"🎤 Audio energy: {audio_energy:.1f} | Avg: {avg_energy:.1f} | Threshold: {self._energy_threshold}")
             
-            # Only trigger speech detection for significant audio energy
-            if audio_energy > energy_threshold and not self._processing_audio:
+            # Enhanced speech detection - require sustained high energy
+            speech_detected = self._detect_sustained_speech(audio_energy, current_time)
+            
+            # Only trigger speech detection for sustained high energy
+            if speech_detected and not self._processing_audio:
                 self._processing_audio = True
-                await websocket.send_json({
-                    "type": "speech_detected",
-                    "confidence": min(0.9, audio_energy / 2000),  # Dynamic confidence
-                    "energy": audio_energy,
-                    "timestamp": datetime.now().isoformat()
-                })
-                logger.info(f"🗣️ BACKEND HEARD YOU: Speech detected (energy: {audio_energy})")
+                self._last_speech_time = current_time
+                
+                # Calculate confidence based on energy levels and consistency
+                confidence = self._calculate_speech_confidence()
+                
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json({
+                        "type": "speech_detected",
+                        "confidence": confidence,
+                        "energy": audio_energy,
+                        "sustained_chunks": len([e for e in self._recent_energy_levels[-self._min_sustained_chunks:] if e > self._energy_threshold]),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                logger.info(f"🗣️ BACKEND HEARD YOU: Speech detected (energy: {audio_energy}, confidence: {confidence:.2f})")
             
             # Smart buffer processing - process when we have enough data AND speech was detected
             buffer_size = len(self._audio_buffer)
@@ -211,6 +240,15 @@ class AudioSession:
                 should_process = True
                 process_reason = f"max buffer reached: {buffer_size} bytes"
             
+            # Skip processing if no recent high energy (likely just noise)
+            recent_avg_energy = sum(self._recent_energy_levels[-5:]) / min(5, len(self._recent_energy_levels)) if self._recent_energy_levels else 0
+            if should_process and recent_avg_energy < (self._energy_threshold * 0.6):
+                logger.debug(f"🔇 Skipping processing - recent avg energy too low: {recent_avg_energy:.1f}")
+                should_process = False
+                # Clear buffer of likely noise
+                self._audio_buffer.clear()
+                self._processing_audio = False
+            
             if should_process:
                 # Get raw audio bytes from buffer
                 audio_bytes = bytes(self._audio_buffer)
@@ -226,53 +264,57 @@ class AudioSession:
                 # Convert raw PCM to WAV format for Deepgram
                 wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
                 
-                # Send transcription start event
-                await websocket.send_json({
-                    "type": "transcription_partial",
-                    "text": "",
-                    "message": "Processing your speech...",
-                    "buffer_size": len(audio_bytes),
-                    "timestamp": datetime.now().isoformat()
-                })
+                # Send transcription start event (check connection first)
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json({
+                        "type": "transcription_partial",
+                        "text": "",
+                        "message": "Processing your speech...",
+                        "buffer_size": len(audio_bytes),
+                        "timestamp": datetime.now().isoformat()
+                    })
                 logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
                 
                 # Transcribe using Direct Deepgram service
                 transcription = await self.stt_service.transcribe_audio_bytes(wav_audio)
                 
                 if transcription and transcription.strip():
-                    # Send complete transcription
-                    await websocket.send_json({
-                        "type": "transcription_complete",
-                        "text": transcription.strip(),
-                        "buffer_size": len(audio_bytes),
-                        "timestamp": datetime.now().isoformat()
-                    })
+                    # Send complete transcription (check connection first)
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json({
+                            "type": "transcription_complete",
+                            "text": transcription.strip(),
+                            "buffer_size": len(audio_bytes),
+                            "timestamp": datetime.now().isoformat()
+                        })
                     logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
                     logger.info(f"👤 User ({self.character}): '{transcription}'")
                     return transcription.strip()
                 else:
-                    # Send empty transcription result
-                    await websocket.send_json({
-                        "type": "transcription_complete",
-                        "text": "",
-                        "message": "No speech detected in audio",
-                        "buffer_size": len(audio_bytes),
-                        "timestamp": datetime.now().isoformat()
-                    })
+                    # Send empty transcription result (check connection first)
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json({
+                            "type": "transcription_complete",
+                            "text": "",
+                            "message": "No speech detected in audio",
+                            "buffer_size": len(audio_bytes),
+                            "timestamp": datetime.now().isoformat()
+                        })
                     logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
                     
         except Exception as e:
             logger.error(f"❌ Audio processing error in session {self.session_id}: {e}")
-            # Send error event to frontend
-            try:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Audio processing failed",
-                    "details": str(e),
-                    "timestamp": datetime.now().isoformat()
-                })
-            except:
-                pass  # Don't fail on websocket send error
+            # Send error event to frontend (only if connection is active)
+            if websocket.client_state == WebSocketState.CONNECTED:
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Audio processing failed",
+                        "details": str(e),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                except:
+                    logger.debug("Could not send audio processing error - connection closed")
             
         return None
     
@@ -298,6 +340,60 @@ class AudioSession:
         except Exception as e:
             logger.warning(f"⚠️ Error calculating audio energy: {e}")
             return 0.0
+    
+    def _detect_sustained_speech(self, current_energy: float, current_time: float) -> bool:
+        """Detect if we have sustained speech rather than just noise spikes"""
+        # Check if enough time has passed since last speech (cooldown)
+        if current_time - self._last_speech_time < self._speech_cooldown:
+            return False
+        
+        # Check if current energy is above threshold
+        if current_energy < self._energy_threshold:
+            return False
+        
+        # Check if we have enough recent measurements
+        if len(self._recent_energy_levels) < self._min_sustained_chunks:
+            return False
+        
+        # Check if recent chunks have sustained high energy
+        recent_high_energy_chunks = [
+            e for e in self._recent_energy_levels[-self._min_sustained_chunks:] 
+            if e > self._energy_threshold
+        ]
+        
+        # Require at least 3 out of last 3 chunks to be high energy
+        return len(recent_high_energy_chunks) >= self._min_sustained_chunks
+    
+    def _calculate_speech_confidence(self) -> float:
+        """Calculate confidence score based on energy patterns"""
+        if not self._recent_energy_levels:
+            return 0.0
+        
+        # Get recent measurements
+        recent_energies = self._recent_energy_levels[-self._min_sustained_chunks:]
+        if not recent_energies:
+            return 0.0
+        
+        # Calculate average energy over threshold
+        avg_energy = sum(recent_energies) / len(recent_energies)
+        
+        # Calculate consistency (lower standard deviation = more consistent = higher confidence)
+        if len(recent_energies) > 1:
+            import math
+            variance = sum((e - avg_energy) ** 2 for e in recent_energies) / len(recent_energies)
+            std_dev = math.sqrt(variance)
+            consistency = max(0, 1 - (std_dev / avg_energy)) if avg_energy > 0 else 0
+        else:
+            consistency = 1.0
+        
+        # Base confidence on energy level above threshold
+        energy_ratio = min(avg_energy / self._energy_threshold, 3.0)  # Cap at 3x threshold
+        energy_confidence = min(0.9, energy_ratio / 3.0)
+        
+        # Combine energy confidence with consistency
+        final_confidence = (energy_confidence * 0.7) + (consistency * 0.3)
+        
+        return min(0.95, max(0.1, final_confidence))
     
     async def generate_response(self, user_input: str) -> str:
         """Generate AI response using character personality"""
@@ -424,6 +520,11 @@ class AudioSession:
     async def process_and_stream_response(self, websocket: WebSocket, user_input: str):
         """Generate AI response and stream audio chunks in real-time"""
         try:
+            # Check connection state before starting
+            if websocket.client_state != WebSocketState.CONNECTED:
+                logger.warning(f"⚠️ WebSocket disconnected, cannot stream response")
+                return
+            
             # Send processing started event
             await websocket.send_json({
                 "type": "processing_started",
@@ -441,32 +542,39 @@ class AudioSession:
             
             if not chunks:
                 logger.warning("⚠️ No chunks generated from AI response")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Failed to generate response chunks",
-                    "timestamp": datetime.now().isoformat()
-                })
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Failed to generate response chunks",
+                        "timestamp": datetime.now().isoformat()
+                    })
                 return
             
             logger.info(f"🎯 Streaming {len(chunks)} audio chunks for response")
             
             # Send response start notification with full details
-            await websocket.send_json({
-                "type": "response_start",
-                "character": self.character,
-                "total_chunks": len(chunks),
-                "full_text": response_text,
-                "timestamp": datetime.now().isoformat()
-            })
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "response_start",
+                    "character": self.character,
+                    "total_chunks": len(chunks),
+                    "full_text": response_text,
+                    "timestamp": datetime.now().isoformat()
+                })
             
             # Process and stream each chunk
             for i, chunk_text in enumerate(chunks):
+                # Check connection before processing each chunk
+                if websocket.client_state != WebSocketState.CONNECTED:
+                    logger.warning(f"⚠️ WebSocket disconnected during chunk {i+1}, stopping stream")
+                    break
+                
                 chunk_start_time = time.time()
                 
                 # Generate TTS for this chunk
                 wav_audio = await self.synthesize_speech_chunk(chunk_text)
                 
-                if wav_audio:
+                if wav_audio and websocket.client_state == WebSocketState.CONNECTED:
                     chunk_duration = (time.time() - chunk_start_time) * 1000
                     
                     # Send audio chunk immediately
@@ -483,24 +591,33 @@ class AudioSession:
                     })
                     
                     logger.info(f"🎵 Sent chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars, {chunk_duration:.0f}ms)")
-                else:
+                elif not wav_audio:
                     logger.error(f"❌ Failed to generate audio for chunk {i+1}: '{chunk_text[:30]}...'")
+                else:
+                    logger.warning(f"⚠️ WebSocket disconnected, cannot send chunk {i+1}")
+                    break
             
-            # Send completion notification
-            await websocket.send_json({
-                "type": "response_complete",
-                "character": self.character,
-                "chunks_sent": len(chunks),
-                "timestamp": datetime.now().isoformat()
-            })
+            # Send completion notification (if still connected)
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "response_complete",
+                    "character": self.character,
+                    "chunks_sent": len(chunks),
+                    "timestamp": datetime.now().isoformat()
+                })
             
         except Exception as e:
             logger.error(f"❌ Error in streaming response: {e}")
-            await websocket.send_json({
-                "type": "error",
-                "message": "Failed to stream response",
-                "timestamp": datetime.now().isoformat()
-            })
+            # Only try to send error if connection is still active
+            if websocket.client_state == WebSocketState.CONNECTED:
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Failed to stream response",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                except:
+                    logger.debug("Could not send error message - connection already closed")
     
     async def cleanup(self):
         """Clean up session resources"""
