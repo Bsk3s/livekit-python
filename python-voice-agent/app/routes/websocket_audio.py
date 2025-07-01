@@ -153,6 +153,12 @@ class AudioSession:
         self._last_speech_time = 0      # Track when we last detected speech
         self._speech_cooldown = 2.0     # Seconds to wait after speech before resetting
         
+        # Conversational session state management
+        self.session_active = True      # Session is active for conversation
+        self.conversation_state = "LISTENING"  # LISTENING, PROCESSING, RESPONDING
+        self.last_activity_time = time.time()  # Track activity for timeout management
+        self.conversation_turn_count = 0       # Track number of conversation turns
+        
     async def initialize(self):
         """Initialize all services for this session"""
         try:
@@ -172,7 +178,11 @@ class AudioSession:
             character_config = CharacterFactory.get_character_config(self.character)
             self.tts_service = OpenAITTSService()
             
-            logger.info(f"✅ Audio session {self.session_id} initialized with character {self.character}")
+            # Set initial conversation state
+            self.conversation_state = "LISTENING"
+            self.last_activity_time = time.time()
+            
+            logger.info(f"✅ Audio session {self.session_id} initialized with character {self.character} - Ready for conversation")
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize session {self.session_id}: {e}")
@@ -185,6 +195,18 @@ class AudioSession:
             if websocket.client_state != WebSocketState.CONNECTED:
                 logger.warning(f"⚠️ WebSocket not connected, skipping audio processing")
                 return None
+            
+            # Check session state - only process audio when LISTENING
+            if not self.session_active:
+                logger.debug(f"Session inactive, skipping audio processing")
+                return None
+                
+            if self.conversation_state != "LISTENING":
+                logger.debug(f"Not in LISTENING state (current: {self.conversation_state}), skipping audio processing")
+                return None
+            
+            # Update activity time
+            self.last_activity_time = time.time()
             
             # Add to buffer
             self._audio_buffer.extend(audio_data)
@@ -250,6 +272,9 @@ class AudioSession:
                 self._processing_audio = False
             
             if should_process:
+                # Change to PROCESSING state
+                self.conversation_state = "PROCESSING"
+                
                 # Get raw audio bytes from buffer
                 audio_bytes = bytes(self._audio_buffer)
                 
@@ -271,6 +296,7 @@ class AudioSession:
                         "text": "",
                         "message": "Processing your speech...",
                         "buffer_size": len(audio_bytes),
+                        "conversation_state": self.conversation_state,
                         "timestamp": datetime.now().isoformat()
                     })
                 logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
@@ -285,10 +311,16 @@ class AudioSession:
                             "type": "transcription_complete",
                             "text": transcription.strip(),
                             "buffer_size": len(audio_bytes),
+                            "conversation_state": self.conversation_state,
                             "timestamp": datetime.now().isoformat()
                         })
                     logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
                     logger.info(f"👤 User ({self.character}): '{transcription}'")
+                    
+                    # Increment conversation turn
+                    self.conversation_turn_count += 1
+                    logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
+                    
                     return transcription.strip()
                 else:
                     # Send empty transcription result (check connection first)
@@ -298,9 +330,13 @@ class AudioSession:
                             "text": "",
                             "message": "No speech detected in audio",
                             "buffer_size": len(audio_bytes),
+                            "conversation_state": self.conversation_state,
                             "timestamp": datetime.now().isoformat()
                         })
                     logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
+                    
+                    # Return to LISTENING state if no speech found
+                    self.conversation_state = "LISTENING"
                     
         except Exception as e:
             logger.error(f"❌ Audio processing error in session {self.session_id}: {e}")
@@ -525,14 +561,24 @@ class AudioSession:
                 logger.warning(f"⚠️ WebSocket disconnected, cannot stream response")
                 return
             
+            # Check session state
+            if not self.session_active:
+                logger.warning(f"⚠️ Session inactive, cannot stream response")
+                return
+            
+            # Change to RESPONDING state
+            self.conversation_state = "RESPONDING"
+            
             # Send processing started event
             await websocket.send_json({
                 "type": "processing_started",
                 "character": self.character,
                 "message": f"{self.character.title()} is thinking...",
+                "conversation_state": self.conversation_state,
+                "conversation_turn": self.conversation_turn_count,
                 "timestamp": datetime.now().isoformat()
             })
-            logger.info(f"🤖 Processing started with {self.character}")
+            logger.info(f"🤖 Processing started with {self.character} (Turn #{self.conversation_turn_count})")
             
             # Generate AI response
             response_text = await self.generate_response(user_input)
@@ -603,8 +649,16 @@ class AudioSession:
                     "type": "response_complete",
                     "character": self.character,
                     "chunks_sent": len(chunks),
+                    "conversation_turn": self.conversation_turn_count,
                     "timestamp": datetime.now().isoformat()
                 })
+            
+            # Return to LISTENING state for next user input
+            self.conversation_state = "LISTENING"
+            logger.info(f"🔄 Response complete - Back to LISTENING state (Turn #{self.conversation_turn_count})")
+            
+            # Update activity time
+            self.last_activity_time = time.time()
             
         except Exception as e:
             logger.error(f"❌ Error in streaming response: {e}")
@@ -619,12 +673,45 @@ class AudioSession:
                 except:
                     logger.debug("Could not send error message - connection already closed")
     
+    def reset_for_next_turn(self):
+        """Reset audio processing state between conversation turns (not between sessions)"""
+        # Clear audio buffers but keep session active
+        self._audio_buffer.clear()
+        self._processing_audio = False
+        
+        # Reset speech detection state but keep energy history for context
+        # Keep last few energy measurements for better detection
+        if len(self._recent_energy_levels) > 5:
+            self._recent_energy_levels = self._recent_energy_levels[-3:]
+        
+        # Update activity time
+        self.last_activity_time = time.time()
+        
+        logger.debug(f"🔄 Session {self.session_id} reset for next conversation turn")
+    
+    def is_session_active(self) -> bool:
+        """Check if session should remain active based on recent activity"""
+        inactive_time = time.time() - self.last_activity_time
+        
+        # Keep session active for 5 minutes of inactivity
+        max_inactive_time = 300  # 5 minutes
+        
+        if inactive_time > max_inactive_time:
+            logger.info(f"⏰ Session {self.session_id} inactive for {inactive_time:.1f}s, marking for cleanup")
+            self.session_active = False
+            
+        return self.session_active
+    
     async def cleanup(self):
         """Clean up session resources"""
         try:
+            # Mark session as inactive
+            self.session_active = False
+            self.conversation_state = "DISCONNECTED"
+            
             if self.stt_service:
                 await self.stt_service.shutdown()
-            logger.info(f"🧹 Session {self.session_id} cleaned up")
+            logger.info(f"🧹 Session {self.session_id} cleaned up (had {self.conversation_turn_count} turns)")
         except Exception as e:
             logger.warning(f"⚠️ Cleanup error for session {self.session_id}: {e}")
 
@@ -650,6 +737,14 @@ async def websocket_audio_endpoint(websocket: WebSocket):
         
         while websocket.client_state == WebSocketState.CONNECTED:
             try:
+                # Check session activity if session exists
+                if session and not session.is_session_active():
+                    logger.info(f"⏰ Session {session_id} timed out, cleaning up")
+                    await session.cleanup()
+                    if session_id in active_sessions:
+                        del active_sessions[session_id]
+                    break
+                
                 # Receive message from client
                 data = await asyncio.wait_for(websocket.receive(), timeout=30.0)
                 
@@ -663,18 +758,24 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                     
                 elif "bytes" in data:
                     # Handle binary audio data
-                    if session and session.stt_service:
+                    if session and session.stt_service and session.session_active:
                         audio_data = data["bytes"]
                         transcription = await session.process_audio_chunk(audio_data, websocket)
                         
                         if transcription:
                             # Process and stream response in chunks
                             await session.process_and_stream_response(websocket, transcription)
+                            # Reset for next conversation turn (but keep session alive)
+                            session.reset_for_next_turn()
                             
             except asyncio.TimeoutError:
-                # Send keepalive ping
+                # Send keepalive ping and check session activity
                 if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_json({"type": "ping"})
+                    await websocket.send_json({
+                        "type": "ping",
+                        "session_active": session.session_active if session else False,
+                        "conversation_turns": session.conversation_turn_count if session else 0
+                    })
                     
             except WebSocketDisconnect:
                 break
@@ -725,9 +826,26 @@ async def handle_json_message(websocket: WebSocket, session: Optional[AudioSessi
                 "type": "initialized",
                 "character": character,
                 "session_id": session_id,
-                "message": f"Session initialized with {character.title()}",
+                "message": f"Connected to {character.title()} - Ready for conversation",
+                "conversation_state": session.conversation_state,
+                "session_active": session.session_active,
                 "timestamp": datetime.now().isoformat()
             })
+            
+            # Send welcome message from character
+            character_obj = CharacterFactory.create_character(character)
+            welcome_message = f"Hello! I'm {character.title()}. I'm here to listen and support you. How are you feeling today?"
+            
+            # Send welcome as first response (but don't count as conversation turn)
+            await websocket.send_json({
+                "type": "welcome_message",
+                "character": character,
+                "text": welcome_message,
+                "conversation_state": session.conversation_state,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            logger.info(f"👋 {character.title()} welcomed user in session {session_id}")
             
         elif message_type == "switch_character":
             if session:
