@@ -1,12 +1,12 @@
 """
 Spiritual Voice Agent - Production-ready LiveKit voice agent for spiritual guidance.
 
-A professional Python package providing AI-powered spiritual guidance through voice conversations 
+A professional Python package providing AI-powered spiritual guidance through voice conversations
 with two distinct characters: Adina (compassionate) and Raffa (wise).
 
 Features:
 - FastAPI web server for token generation
-- LiveKit agent workers for real-time voice interaction  
+- LiveKit agent workers for real-time voice interaction
 - Character-based personality system
 - Production-ready deployment configurations
 - Comprehensive test suite
@@ -32,7 +32,7 @@ from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
 
 __all__ = [
     "__version__",
-    "__author__", 
+    "__author__",
     "__email__",
     "__description__",
     "__url__",

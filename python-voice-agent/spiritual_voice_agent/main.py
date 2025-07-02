@@ -1,20 +1,20 @@
-import os
 import logging
-from datetime import datetime
+import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Configure logging for production FIRST
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 # Import routes - no more sys.path hacks needed!
 from spiritual_voice_agent.routes import token, websocket_audio
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -26,11 +26,12 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("👋 Spiritual Guidance API shutting down")
 
+
 app = FastAPI(
     title="Spiritual Guidance Voice Agent API",
     description="Production API for LiveKit spiritual guidance voice agent with Adina and Raffa characters",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Configure CORS for production
@@ -41,12 +42,13 @@ app.add_middleware(
         "http://localhost:19006",  # Expo web
         "https://*.onrender.com",  # Render deployments
         "https://*.expo.dev",  # Expo hosted apps
-        "*"  # Allow all for now - restrict in production
+        "*",  # Allow all for now - restrict in production
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "HEAD", "OPTIONS"],
     allow_headers=["*"],
 )
+
 
 # Health check endpoint for Render - supports both GET and HEAD
 @app.get("/health")
@@ -64,9 +66,10 @@ async def health_check():
             "llm": "gpt-4o-mini",
             "stt": "deepgram",
             "tts": "openai",
-            "characters": ["adina", "raffa"]
-        }
+            "characters": ["adina", "raffa"],
+        },
     }
+
 
 # Root endpoint - supports both GET and HEAD
 @app.get("/")
@@ -82,24 +85,23 @@ async def root():
             "health": "/health",
             "websocket": "/ws/audio",
             "token": "/api/spiritual-token",
-            "legacy_token": "/api/createToken"
+            "legacy_token": "/api/createToken",
         },
-        "docs": "/docs"
+        "docs": "/docs",
     }
+
 
 # Include routers
 app.include_router(token.router, prefix="/api", tags=["Authentication"])
 app.include_router(websocket_audio.router, tags=["WebSocket Audio"])
 
+
 def main():
     """Main entry point for the FastAPI application"""
     import uvicorn
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=int(os.getenv("PORT", 8000)),
-        log_level="info"
-    )
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)), log_level="info")
+
 
 if __name__ == "__main__":
-    main() 
+    main()

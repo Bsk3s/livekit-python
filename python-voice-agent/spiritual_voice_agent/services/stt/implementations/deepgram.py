@@ -1,20 +1,23 @@
 import os
-from typing import AsyncGenerator, Dict, Any
+from typing import Any, AsyncGenerator, Dict
+
 from livekit.plugins import deepgram
+
 from ..base import BaseSTTService
+
 
 class DeepgramSTTService(BaseSTTService):
     """Deepgram implementation of the STT service."""
-    
+
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config)
         self._client = None
         self._initialized = False
-    
+
     def _validate_config(self) -> None:
         if not os.getenv("DEEPGRAM_API_KEY"):
             raise ValueError("DEEPGRAM_API_KEY environment variable is not set")
-    
+
     async def initialize(self) -> None:
         if not self._initialized:
             self._client = deepgram.STT(
@@ -31,29 +34,31 @@ class DeepgramSTTService(BaseSTTService):
                 numerals=self.config.get("numerals", False),
             )
             self._initialized = True
-    
+
     async def shutdown(self) -> None:
         if self._client:
             # Add any necessary cleanup
             self._initialized = False
-    
+
     @property
     def is_initialized(self) -> bool:
         return self._initialized
-    
-    async def transcribe_stream(self, audio_stream: AsyncGenerator[bytes, None]) -> AsyncGenerator[str, None]:
+
+    async def transcribe_stream(
+        self, audio_stream: AsyncGenerator[bytes, None]
+    ) -> AsyncGenerator[str, None]:
         if not self._initialized:
             await self.initialize()
-        
+
         async for chunk in audio_stream:
             # Implement streaming transcription logic
             # This is a placeholder - actual implementation will depend on Deepgram's API
             yield "Transcribed text"  # Replace with actual transcription
-    
+
     async def transcribe_file(self, audio_file_path: str) -> str:
         if not self._initialized:
             await self.initialize()
-        
+
         # Implement file transcription logic
         # This is a placeholder - actual implementation will depend on Deepgram's API
-        return "Complete transcription"  # Replace with actual transcription 
+        return "Complete transcription"  # Replace with actual transcription

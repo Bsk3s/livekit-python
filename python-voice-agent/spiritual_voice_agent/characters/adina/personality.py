@@ -9,10 +9,10 @@ class AdinaPersonality:
     - Share insights from the Gospels
     - Guide with compassionate understanding
     """
-    
+
     TOOLS = [
         "share_faith_story",  # Share stories of faith
         "offer_spiritual_comfort",  # Provide comfort and hope
         "guide_meditation",  # Lead in spiritual reflection
-        "share_healing_wisdom"  # Share wisdom for healing
-    ] 
+        "share_healing_wisdom",  # Share wisdom for healing
+    ]

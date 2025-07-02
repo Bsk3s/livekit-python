@@ -9,10 +9,10 @@ class RaffaPersonality:
     - Share wisdom from Proverbs and Psalms
     - Guide with gentle authority
     """
-    
+
     TOOLS = [
         "share_wisdom_story",  # Share biblical wisdom stories
         "provide_scriptural_guidance",  # Offer relevant scripture
         "lead_prayer",  # Guide in prayer
-        "share_personal_insight"  # Share wisdom from experience
-    ] 
+        "share_personal_insight",  # Share wisdom from experience
+    ]
