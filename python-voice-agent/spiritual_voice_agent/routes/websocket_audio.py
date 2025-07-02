@@ -143,7 +143,7 @@ def chunk_ai_response(full_response: str, max_chunk_length: int = 100) -> List[s
 
 
 class AudioSession:
-    """Manages individual audio streaming sessions"""
+    """Manages individual audio streaming sessions with reliability watchdog"""
 
     def __init__(self, session_id: str, character: str = "adina"):
         self.session_id = session_id
@@ -171,11 +171,21 @@ class AudioSession:
         self.conversation_state = "LISTENING"  # LISTENING, PROCESSING, RESPONDING
         self.last_activity_time = time.time()  # Track activity for timeout management
         self.conversation_turn_count = 0  # Track number of conversation turns
+        
+        # 🛡️ RELIABILITY WATCHDOG - Zero latency background monitoring
+        self._state_change_time = time.time()  # When current state started
+        self._watchdog_task: Optional[asyncio.Task] = None
+        self._cleanup_queue = []  # Async cleanup tasks to run after responses
+        self._max_state_duration = 7.0  # Aggressive: Force reset after 7 seconds
+        self._last_health_check = time.time()  # Quick health status cache
+        self._current_websocket: Optional[WebSocket] = None  # Track current websocket connection
 
     async def initialize(self):
         """Initialize all services for this session"""
+        logger.info(f"🚀 STARTING AudioSession.initialize() for session {self.session_id}")
         try:
             # STT Service - Direct Deepgram (no LiveKit context needed)
+            logger.info(f"🎧 Creating STT service for session {self.session_id}")
             self.stt_service = DirectDeepgramSTTService(
                 {
                     "model": "nova-2",
@@ -185,17 +195,28 @@ class AudioSession:
                 }
             )
             await self.stt_service.initialize()
+            logger.info(f"✅ STT service initialized for session {self.session_id}")
 
             # LLM Service - Fixed OpenAI adapter
+            logger.info(f"🧠 Creating LLM service for session {self.session_id}")
             self.llm_service = create_gpt4o_mini()
+            logger.info(f"✅ LLM service initialized for session {self.session_id}")
 
             # TTS Service - OpenAI with character voice
+            logger.info(f"🎵 Creating TTS service for session {self.session_id}")
             character_config = CharacterFactory.get_character_config(self.character)
             self.tts_service = TTSFactory.create_tts("default")
+            logger.info(f"✅ TTS service initialized for session {self.session_id}")
 
             # Set initial conversation state
-            self.conversation_state = "LISTENING"
+            logger.info(f"🛡️ Setting initial state to LISTENING for session {self.session_id}")
+            self._set_state("LISTENING")
             self.last_activity_time = time.time()
+
+            # 🛡️ Start reliability watchdog (background monitoring, zero latency impact)
+            logger.info(f"🛡️ About to start watchdog for session {self.session_id}")
+            self._start_watchdog()
+            logger.info(f"🛡️ Watchdog started for session {self.session_id}")
 
             logger.info(
                 f"✅ Audio session {self.session_id} initialized with character {self.character} - Ready for conversation"
@@ -203,10 +224,170 @@ class AudioSession:
 
         except Exception as e:
             logger.error(f"❌ Failed to initialize session {self.session_id}: {e}")
+            logger.error(f"❌ Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            # 🛡️ GUARANTEED RESET: Always return to safe state
+            self._force_reset_state("LISTENING", f"initialization_error: {e}")
             raise
+
+    def _set_state(self, new_state: str):
+        """Set conversation state with watchdog tracking (zero latency)"""
+        if self.conversation_state != new_state:
+            old_state = self.conversation_state
+            self.conversation_state = new_state
+            self._state_change_time = time.time()
+            logger.info(f"🛡️ State change: {old_state} → {new_state} at {self._state_change_time}")
+
+    def _start_watchdog(self):
+        """Start background watchdog timer (runs independently, zero latency impact)"""
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+        
+        logger.info(f"🛡️ Starting watchdog for session {self.session_id}")
+        self._watchdog_task = asyncio.create_task(self._watchdog_monitor())
+        logger.debug(f"🛡️ Watchdog task created: {self._watchdog_task}")
+
+    async def _watchdog_monitor(self):
+        """Background watchdog that monitors for stuck states (zero latency impact)"""
+        logger.info(f"🛡️ Watchdog monitor started for session {self.session_id}")
+        try:
+            check_count = 0
+            while self.session_active:
+                await asyncio.sleep(0.5)  # Check more frequently - every 500ms
+                check_count += 1
+                
+                # Skip monitoring if in LISTENING state (safe state)
+                if self.conversation_state == "LISTENING":
+                    if check_count % 10 == 0:  # Log every 5 seconds when in LISTENING
+                        logger.debug(f"🛡️ Watchdog check #{check_count}: LISTENING state (safe)")
+                    continue
+                
+                state_duration = time.time() - self._state_change_time
+                
+                # Log every check when not in LISTENING state
+                logger.debug(f"🛡️ Watchdog check #{check_count}: State '{self.conversation_state}' for {state_duration:.1f}s")
+                
+                # More aggressive monitoring with warnings
+                if state_duration > 5.0:
+                    logger.warning(
+                        f"🛡️ WATCHDOG WARNING: State '{self.conversation_state}' running for {state_duration:.1f}s"
+                    )
+                
+                if state_duration > self._max_state_duration:
+                    logger.error(
+                        f"🛡️ WATCHDOG FORCE RESET: State '{self.conversation_state}' stuck for {state_duration:.1f}s - EMERGENCY RESET"
+                    )
+                    self._force_reset_state("LISTENING", f"watchdog_emergency_reset_after_{state_duration:.1f}s")
+                    break  # Exit monitoring loop after reset
+                    
+        except asyncio.CancelledError:
+            logger.info(f"🛡️ Watchdog cancelled for session {self.session_id}")
+        except Exception as e:
+            logger.error(f"🛡️ Watchdog error: {e}")
+        finally:
+            logger.info(f"🛡️ Watchdog monitor ended for session {self.session_id}")
+
+    def _force_reset_state(self, target_state: str = "LISTENING", reason: str = "unknown"):
+        """Force immediate state reset (emergency recovery, minimal latency)"""
+        logger.error(f"🛡️ EMERGENCY FORCE RESET: {self.conversation_state} → {target_state} (reason: {reason})")
+        
+        # Immediate state reset
+        old_state = self.conversation_state
+        self._set_state(target_state)
+        
+        # Clear processing flags immediately
+        self._processing_audio = False
+        
+        # Force cleanup of buffers immediately
+        self._audio_buffer.clear()
+        
+        # 🛡️ NOTIFY CLIENT: Send error response so client doesn't hang
+        if hasattr(self, '_current_websocket') and self._current_websocket:
+            try:
+                asyncio.create_task(self._send_watchdog_error(reason))
+            except Exception as e:
+                logger.warning(f"⚠️ Could not send watchdog error to client: {e}")
+        
+        # Log emergency reset for monitoring
+        logger.error(f"🚨 EMERGENCY: Session {self.session_id} force reset from {old_state} after {reason}")
+        
+        # Schedule heavy cleanup for later (zero latency)
+        self._schedule_cleanup(f"emergency_reset_{reason}")
+    
+    async def _send_watchdog_error(self, reason: str):
+        """Send error response to client when watchdog triggers"""
+        try:
+            if self._current_websocket:
+                await self._current_websocket.send_json({
+                    "type": "error",
+                    "message": f"Request timeout - system reset for reliability",
+                    "reason": reason,
+                    "conversation_state": self.conversation_state,
+                    "timestamp": datetime.now().isoformat(),
+                })
+                logger.info(f"🛡️ Sent watchdog error to client: {reason}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to send watchdog error: {e}")
+
+    def _schedule_cleanup(self, reason: str):
+        """Schedule cleanup to happen asynchronously (zero latency impact)"""
+        cleanup_task = asyncio.create_task(self._async_cleanup(reason))
+        self._cleanup_queue.append(cleanup_task)
+        
+        # Keep only last 5 cleanup tasks
+        while len(self._cleanup_queue) > 5:
+            old_task = self._cleanup_queue.pop(0)
+            if not old_task.done():
+                old_task.cancel()
+
+    async def _async_cleanup(self, reason: str):
+        """Async cleanup that doesn't block responses (runs in background)"""
+        try:
+            # Clear buffers
+            self._audio_buffer.clear()
+            
+            # Reset energy tracking
+            if len(self._recent_energy_levels) > 5:
+                self._recent_energy_levels = self._recent_energy_levels[-3:]
+            
+            # Update activity time
+            self.last_activity_time = time.time()
+            
+            # Force garbage collection for memory cleanup
+            import gc
+            gc.collect()
+            
+            logger.debug(f"🧹 Async cleanup completed for session {self.session_id} (reason: {reason})")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Async cleanup error: {e}")
+
+    def _is_healthy(self) -> bool:
+        """Quick health check (cached for 1 second, minimal latency)"""
+        current_time = time.time()
+        
+        # Use cached result if checked recently
+        if current_time - self._last_health_check < 1.0:
+            return True
+        
+        self._last_health_check = current_time
+        
+        # Quick checks only (no network calls)
+        return (
+            self.session_active and 
+            self.stt_service is not None and 
+            self.llm_service is not None and 
+            self.tts_service is not None
+        )
 
     async def process_audio_chunk(self, audio_data: bytes, websocket: WebSocket) -> Optional[str]:
         """Process incoming audio chunk and return transcription if available"""
+        # 🛡️ RELIABILITY: Pre-flight health checks (minimal latency)
+        if not self._is_healthy():
+            logger.warning(f"⚠️ Session unhealthy, skipping audio processing")
+            return None
+            
         try:
             # Check WebSocket connection state before processing
             if websocket.client_state != WebSocketState.CONNECTED:
@@ -311,8 +492,8 @@ class AudioSession:
                 self._processing_audio = False
 
             if should_process:
-                # Change to PROCESSING state
-                self.conversation_state = "PROCESSING"
+                # 🛡️ RELIABILITY: Use state tracking for watchdog
+                self._set_state("PROCESSING")
 
                 # Get raw audio bytes from buffer
                 audio_bytes = bytes(self._audio_buffer)
@@ -325,66 +506,87 @@ class AudioSession:
 
                 logger.info(f"📝 Processing audio buffer: {process_reason}")
 
-                # Convert raw PCM to WAV format for Deepgram
-                wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
+                # 🛡️ RELIABILITY: Critical operation with timeout protection
+                try:
+                    # Convert raw PCM to WAV format for Deepgram
+                    wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
 
-                # Send transcription start event (check connection first)
-                if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_json(
-                        {
-                            "type": "transcription_partial",
-                            "text": "",
-                            "message": "Processing your speech...",
-                            "buffer_size": len(audio_bytes),
-                            "conversation_state": self.conversation_state,
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
-
-                # Transcribe using Direct Deepgram service
-                transcription = await self.stt_service.transcribe_audio_bytes(wav_audio)
-
-                if transcription and transcription.strip():
-                    # Send complete transcription (check connection first)
+                    # Send transcription start event (check connection first)
                     if websocket.client_state == WebSocketState.CONNECTED:
                         await websocket.send_json(
                             {
-                                "type": "transcription_complete",
-                                "text": transcription.strip(),
-                                "buffer_size": len(audio_bytes),
-                                "conversation_state": self.conversation_state,
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-                    logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
-                    logger.info(f"👤 User ({self.character}): '{transcription}'")
-
-                    # Increment conversation turn
-                    self.conversation_turn_count += 1
-                    logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
-
-                    return transcription.strip()
-                else:
-                    # Send empty transcription result (check connection first)
-                    if websocket.client_state == WebSocketState.CONNECTED:
-                        await websocket.send_json(
-                            {
-                                "type": "transcription_complete",
+                                "type": "transcription_partial",
                                 "text": "",
-                                "message": "No speech detected in audio",
+                                "message": "Processing your speech...",
                                 "buffer_size": len(audio_bytes),
                                 "conversation_state": self.conversation_state,
                                 "timestamp": datetime.now().isoformat(),
                             }
                         )
-                    logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
+                    logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
 
-                    # Return to LISTENING state if no speech found
-                    self.conversation_state = "LISTENING"
+                    # 🛡️ CRITICAL: STT call with aggressive timeout 
+                    logger.debug(f"🛡️ Starting STT transcription...")
+                    transcription = await asyncio.wait_for(
+                        self.stt_service.transcribe_audio_bytes(wav_audio),
+                        timeout=5.0  # Reduced to 5s - aggressive timeout
+                    )
+                    logger.debug(f"🛡️ STT transcription completed")
+
+                    if transcription and transcription.strip():
+                        # Send complete transcription (check connection first)
+                        if websocket.client_state == WebSocketState.CONNECTED:
+                            await websocket.send_json(
+                                {
+                                    "type": "transcription_complete",
+                                    "text": transcription.strip(),
+                                    "buffer_size": len(audio_bytes),
+                                    "conversation_state": self.conversation_state,
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
+                        logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
+                        logger.info(f"👤 User ({self.character}): '{transcription}'")
+
+                        # Increment conversation turn
+                        self.conversation_turn_count += 1
+                        logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
+
+                        # 🛡️ RELIABILITY: Return to safe state BEFORE returning result
+                        self._set_state("LISTENING")
+                        return transcription.strip()
+                    else:
+                        # Send empty transcription result (check connection first)
+                        if websocket.client_state == WebSocketState.CONNECTED:
+                            await websocket.send_json(
+                                {
+                                    "type": "transcription_complete",
+                                    "text": "",
+                                    "message": "No speech detected in audio",
+                                    "buffer_size": len(audio_bytes),
+                                    "conversation_state": self.conversation_state,
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
+                        logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
+
+                        # 🛡️ RELIABILITY: Return to safe state
+                        self._set_state("LISTENING")
+
+                except asyncio.TimeoutError:
+                    logger.error(f"🛡️ STT timeout after 8s - forcing reset")
+                    self._force_reset_state("LISTENING", "stt_timeout")
+                    
+                except Exception as stt_error:
+                    logger.error(f"🛡️ STT processing failed: {stt_error}")
+                    self._force_reset_state("LISTENING", f"stt_error: {stt_error}")
 
         except Exception as e:
             logger.error(f"❌ Audio processing error in session {self.session_id}: {e}")
+            
+            # 🛡️ GUARANTEED CLEANUP: Always reset state on any error
+            self._force_reset_state("LISTENING", f"audio_chunk_error: {e}")
+            
             # Send error event to frontend (only if connection is active)
             if websocket.client_state == WebSocketState.CONNECTED:
                 try:
@@ -398,6 +600,11 @@ class AudioSession:
                     )
                 except Exception:
                     logger.debug("Could not send audio processing error - connection closed")
+
+        finally:
+            # 🛡️ GUARANTEED: Always ensure we're in a good state
+            if self.conversation_state == "PROCESSING":
+                self._set_state("LISTENING")
 
         return None
 
@@ -609,6 +816,14 @@ class AudioSession:
 
     async def process_and_stream_response(self, websocket: WebSocket, user_input: str):
         """Generate AI response and stream audio chunks in real-time"""
+        # 🛡️ RELIABILITY: Track websocket for watchdog notifications
+        self._current_websocket = websocket
+        
+        # 🛡️ RELIABILITY: Pre-flight health checks (minimal latency)
+        if not self._is_healthy():
+            logger.warning(f"⚠️ Session unhealthy, cannot stream response")
+            return
+            
         try:
             # Check connection state before starting
             if websocket.client_state != WebSocketState.CONNECTED:
@@ -620,8 +835,8 @@ class AudioSession:
                 logger.warning(f"⚠️ Session inactive, cannot stream response")
                 return
 
-            # Change to RESPONDING state
-            self.conversation_state = "RESPONDING"
+            # 🛡️ RELIABILITY: Use state tracking for watchdog
+            self._set_state("RESPONDING")
 
             # Send processing started event
             await websocket.send_json(
@@ -638,8 +853,22 @@ class AudioSession:
                 f"🤖 Processing started with {self.character} (Turn #{self.conversation_turn_count})"
             )
 
-            # Generate AI response
-            response_text = await self.generate_response(user_input)
+            # 🛡️ CRITICAL: LLM call with aggressive timeout protection
+            try:
+                logger.debug(f"🛡️ Starting LLM generation...")
+                response_text = await asyncio.wait_for(
+                    self.generate_response(user_input),
+                    timeout=4.0  # Reduced to 4s - aggressive timeout
+                )
+                logger.debug(f"🛡️ LLM generation completed")
+            except asyncio.TimeoutError:
+                logger.error(f"🛡️ LLM timeout after 4s - forcing reset")
+                self._force_reset_state("LISTENING", "llm_timeout")
+                return
+            except Exception as llm_error:
+                logger.error(f"🛡️ LLM generation failed: {llm_error}")
+                self._force_reset_state("LISTENING", f"llm_error: {llm_error}")
+                return
 
             # Split response into chunks
             chunks = chunk_ai_response(response_text, max_chunk_length=120)
@@ -654,6 +883,8 @@ class AudioSession:
                             "timestamp": datetime.now().isoformat(),
                         }
                     )
+                # 🛡️ RELIABILITY: Reset state even on empty chunks
+                self._force_reset_state("LISTENING", "empty_chunks")
                 return
 
             logger.info(f"🎯 Streaming {len(chunks)} audio chunks for response")
@@ -679,8 +910,20 @@ class AudioSession:
 
                 chunk_start_time = time.time()
 
-                # Generate TTS for this chunk
-                wav_audio = await self.synthesize_speech_chunk(chunk_text)
+                # 🛡️ CRITICAL: TTS call with aggressive timeout protection
+                try:
+                    logger.debug(f"🛡️ Starting TTS for chunk {i+1}...")
+                    wav_audio = await asyncio.wait_for(
+                        self.synthesize_speech_chunk(chunk_text),
+                        timeout=3.0  # Reduced to 3s per chunk - aggressive timeout
+                    )
+                    logger.debug(f"🛡️ TTS completed for chunk {i+1}")
+                except asyncio.TimeoutError:
+                    logger.error(f"🛡️ TTS timeout for chunk {i+1} - skipping")
+                    continue
+                except Exception as tts_error:
+                    logger.error(f"🛡️ TTS failed for chunk {i+1}: {tts_error}")
+                    continue
 
                 if wav_audio and websocket.client_state == WebSocketState.CONNECTED:
                     chunk_duration = (time.time() - chunk_start_time) * 1000
@@ -723,17 +966,21 @@ class AudioSession:
                     }
                 )
 
-            # Return to LISTENING state for next user input
-            self.conversation_state = "LISTENING"
+            # 🛡️ RELIABILITY: Return to safe state BEFORE scheduling cleanup
+            self._set_state("LISTENING")
             logger.info(
                 f"🔄 Response complete - Back to LISTENING state (Turn #{self.conversation_turn_count})"
             )
 
-            # Update activity time
-            self.last_activity_time = time.time()
+            # 🛡️ ASYNC CLEANUP: Schedule cleanup to run in background (zero latency)
+            self._schedule_cleanup("response_complete")
 
         except Exception as e:
             logger.error(f"❌ Error in streaming response: {e}")
+            
+            # 🛡️ GUARANTEED CLEANUP: Always reset state on any error  
+            self._force_reset_state("LISTENING", f"response_error: {e}")
+            
             # Only try to send error if connection is still active
             if websocket.client_state == WebSocketState.CONNECTED:
                 try:
@@ -746,22 +993,22 @@ class AudioSession:
                     )
                 except Exception:
                     logger.debug("Could not send error message - connection already closed")
+                    
+        finally:
+            # 🛡️ GUARANTEED: Always ensure we're in a good state
+            if self.conversation_state == "RESPONDING":
+                self._set_state("LISTENING")
 
     def reset_for_next_turn(self):
         """Reset audio processing state between conversation turns (not between sessions)"""
-        # Clear audio buffers but keep session active
-        self._audio_buffer.clear()
-        self._processing_audio = False
-
-        # Reset speech detection state but keep energy history for context
-        # Keep last few energy measurements for better detection
-        if len(self._recent_energy_levels) > 5:
-            self._recent_energy_levels = self._recent_energy_levels[-3:]
-
-        # Update activity time
-        self.last_activity_time = time.time()
-
-        logger.debug(f"🔄 Session {self.session_id} reset for next conversation turn")
+        # 🛡️ RELIABILITY: Ensure we're in safe state
+        if self.conversation_state != "LISTENING":
+            self._set_state("LISTENING")
+            
+        # 🛡️ ASYNC CLEANUP: Schedule the actual cleanup work (zero latency)
+        self._schedule_cleanup("turn_reset")
+        
+        logger.debug(f"🔄 Session {self.session_id} reset scheduled for next conversation turn")
 
     def is_session_active(self) -> bool:
         """Check if session should remain active based on recent activity"""
@@ -779,14 +1026,31 @@ class AudioSession:
         return self.session_active
 
     async def cleanup(self):
-        """Clean up session resources"""
+        """Clean up session resources with reliability shutdown"""
         try:
-            # Mark session as inactive
+            # Mark session as inactive immediately
             self.session_active = False
-            self.conversation_state = "DISCONNECTED"
+            self._set_state("DISCONNECTED")
 
+            # 🛡️ RELIABILITY: Cancel watchdog first
+            if self._watchdog_task and not self._watchdog_task.done():
+                self._watchdog_task.cancel()
+                try:
+                    await self._watchdog_task
+                except asyncio.CancelledError:
+                    pass  # Expected
+                logger.debug(f"🛡️ Watchdog cancelled for session {self.session_id}")
+
+            # 🛡️ RELIABILITY: Cancel any pending cleanup tasks
+            for task in self._cleanup_queue:
+                if not task.done():
+                    task.cancel()
+            self._cleanup_queue.clear()
+
+            # Shutdown services
             if self.stt_service:
                 await self.stt_service.shutdown()
+                
             logger.info(
                 f"🧹 Session {self.session_id} cleaned up (had {self.conversation_turn_count} turns)"
             )
@@ -806,6 +1070,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
 
     try:
         await websocket.accept()
+        logger.error(f"🚀 WATCHDOG TEST: WebSocket connected - session {session_id} - CODE UPDATED")
         logger.info(f"🔗 WebSocket connected: session {session_id}")
 
         # Send connection confirmation
