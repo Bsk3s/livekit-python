@@ -13,15 +13,14 @@ import time
 from pathlib import Path
 from multiprocessing import Process
 
-# Add the current directory to the Python path since we're already in python-voice-agent
+# Get current directory for subprocess calls
 current_dir = Path(__file__).parent
-sys.path.insert(0, str(current_dir))
 
 def start_token_api():
     """Start the FastAPI token API server"""
     try:
         print("🌐 Starting Token API server...")
-        from app.main import app
+        from spiritual_voice_agent.main import app
         
         # Get port from environment (Render sets this)
         port = int(os.getenv('PORT', 8000))
@@ -30,7 +29,7 @@ def start_token_api():
         import subprocess
         result = subprocess.run([
             sys.executable, "-m", "uvicorn", 
-            "app.main:app",
+            "spiritual_voice_agent.main:app",
             "--host", "0.0.0.0",
             "--port", str(port),
             "--log-level", "info"
@@ -57,7 +56,7 @@ def start_agent_worker():
         # Run the spiritual worker in development mode
         result = subprocess.run([
             sys.executable, 
-            "app/agents/spiritual_worker.py", 
+            "spiritual_voice_agent/agents/spiritual_worker.py", 
             "dev"
         ], cwd=current_dir)
         

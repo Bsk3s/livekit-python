@@ -12,15 +12,13 @@ import signal
 import sys
 from typing import Dict, Optional, Any
 from datetime import datetime
+
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli, llm, stt, tts
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import openai, deepgram, silero
 from livekit.agents import AgentSession, Agent
 from dotenv import load_dotenv
-
-# Add the parent directory to Python path for module resolution
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # CRITICAL: Sanitize environment variables to fix API key issues
 # Remove any trailing whitespace/newlines that cause "illegal header value" errors
@@ -47,9 +45,9 @@ logger = logging.getLogger(__name__)
 TURN_DETECTOR_AVAILABLE = False
 logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)")
 
-# Import our services
-from app.services.llm_service import create_gpt4o_mini
-from app.characters.character_factory import CharacterFactory
+# Import our services - clean imports, no sys.path hacks!
+from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
+from spiritual_voice_agent.characters.character_factory import CharacterFactory
 
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
@@ -136,28 +134,21 @@ class SpiritualAgentWorker:
                     raise
             
             try:
-                # 🎙️ PRIMARY: OPENAI TTS-1 HD
-                logger.info("🎙️ Creating OpenAI TTS service...")
+                # 🎙️ TTS SERVICE: Use configurable TTS factory for easy model swapping
+                logger.info("🎙️ Creating TTS service with factory...")
                 
-                # Character-specific OpenAI voices
-                openai_voice = "alloy"  # Default
-                if character_name.lower() == "adina":
-                    openai_voice = "nova"  # Warm, feminine voice
-                elif character_name.lower() == "raffa":
-                    openai_voice = "onyx"  # Deep, masculine voice
+                # Import TTS factory for easy model swapping
+                from spiritual_voice_agent.services.tts_factory import TTSFactory
                 
-                # Create OpenAI TTS-1 HD (high quality)
-                tts_service = openai.TTS(
-                    voice=openai_voice,
-                    model="tts-1-hd"  # High definition model
-                )
-                logger.info(f"✅ OpenAI TTS-1 HD created (voice: {openai_voice})")
-                logger.info("🎙️ Using reliable OpenAI TTS for high-quality audio")
+                # Create TTS service - easily configurable via environment
+                tts_service = TTSFactory.create_tts(character_name)
+                logger.info(f"✅ TTS service created for {character_name}")
+                logger.info("🔧 TTS model configurable via TTS_MODEL environment variable")
                     
             except Exception as e:
-                logger.error(f"❌ Failed to create OpenAI TTS service: {e}")
+                logger.error(f"❌ Failed to create TTS service: {e}")
                 # 🛡️ EMERGENCY FALLBACK: Basic OpenAI TTS
-                logger.info("🛡️ EMERGENCY: Using basic OpenAI TTS")
+                logger.info("🛡️ EMERGENCY: Using basic OpenAI TTS fallback")
                 try:
                     tts_service = openai.TTS()  # Use absolute defaults
                     logger.info("✅ Emergency TTS fallback created")
@@ -166,7 +157,7 @@ class SpiritualAgentWorker:
                     raise Exception("All TTS services failed - cannot proceed")
 
             logger.info(f"🚀 Services initialized for {character_name}")
-            logger.info(f"   🎙️ TTS: OpenAI TTS (voice: {openai_voice})")
+            logger.info(f"   🎙️ TTS: {tts_service.__class__.__name__}")
             logger.info(f"   🎧 STT: Deepgram STT")
             logger.info(f"   🧠 LLM: GPT-4o Mini")
             
@@ -191,13 +182,9 @@ class SpiritualAgentWorker:
                 logger.info("🔗 TTS service properly wired into AgentSession pipeline")
                 
                 # Log final configuration
-                try:
-                    if hasattr(tts_service, 'voice_id'):
-                        logger.info(f"   🎙️ TTS: ElevenLabs streaming")
-                    else:
-                        logger.info(f"   🎙️ TTS: OpenAI TTS-1 HD")
-                except:
-                    logger.info(f"   🎙️ TTS: Streaming service")
+                from spiritual_voice_agent.services.tts_factory import get_tts_config
+                tts_config = get_tts_config()
+                logger.info(f"   🎙️ TTS: {tts_config['current_model']} ({tts_service.__class__.__name__})")
                 logger.info(f"   🎧 STT: Deepgram STT")
                 logger.info(f"   🧠 LLM: GPT-4o Mini (optimized)")
                 logger.info(f"   ⚡ Target: Natural voice with streaming")

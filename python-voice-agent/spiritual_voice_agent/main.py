@@ -1,13 +1,10 @@
-import sys
 import os
-# Add the parent directory to Python path for module resolution
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import logging
+from datetime import datetime
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
-import logging
-from contextlib import asynccontextmanager
 
 # Configure logging for production FIRST
 logging.basicConfig(
@@ -16,8 +13,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Now import routes after logging is configured
-from app.routes import token, websocket_audio
+# Import routes - no more sys.path hacks needed!
+from spiritual_voice_agent.routes import token, websocket_audio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -94,11 +91,15 @@ async def root():
 app.include_router(token.router, prefix="/api", tags=["Authentication"])
 app.include_router(websocket_audio.router, tags=["WebSocket Audio"])
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the FastAPI application"""
     import uvicorn
     uvicorn.run(
         app, 
         host="0.0.0.0", 
         port=int(os.getenv("PORT", 8000)),
         log_level="info"
-    ) 
+    )
+
+if __name__ == "__main__":
+    main() 

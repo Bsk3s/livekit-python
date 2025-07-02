@@ -1,0 +1,107 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spiritual-voice-agent"
+version = "1.0.0"
+description = "LiveKit spiritual guidance voice agent with AI-powered conversations"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = ["voice", "ai", "livekit", "spiritual", "guidance"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # Core Framework
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "pydantic>=2.0.0",
+    
+    # LiveKit SDK and Agents
+    "livekit-agents[deepgram,openai,silero]",
+    "livekit-plugins-deepgram",
+    "livekit-plugins-openai", 
+    "livekit-plugins-silero",
+    "livekit-plugins-anthropic",
+    "livekit-plugins-cartesia",
+    "livekit-plugins-elevenlabs",
+    
+    # AI Services
+    "openai>=1.0.0",
+    "deepgram-sdk>=3.2.0,<4.0.0",
+    
+    # Audio Processing
+    "numpy",
+    "scipy",
+    
+    # HTTP Client
+    "aiohttp",
+    "httpx",
+    
+    # WebSocket
+    "websockets",
+    
+    # Environment & Configuration
+    "python-dotenv",
+    "pydantic-settings",
+    
+    # Logging
+    "structlog",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "black",
+    "isort", 
+    "flake8",
+    "mypy",
+]
+prod = [
+    "gunicorn",
+]
+
+[project.scripts]
+spiritual-agent = "spiritual_voice_agent.main:main"
+spiritual-worker = "spiritual_voice_agent.agents.spiritual_worker:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/spiritual-voice-agent"
+Repository = "https://github.com/yourusername/spiritual-voice-agent"
+Documentation = "https://github.com/yourusername/spiritual-voice-agent/docs"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["spiritual_voice_agent*"]
+
+[tool.setuptools.package-data]
+"spiritual_voice_agent" = ["*.yaml", "*.json", "*.txt"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+asyncio_mode = "auto" 

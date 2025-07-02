@@ -1,6 +1,6 @@
 from typing import AsyncGenerator, Optional
 from abc import abstractmethod
-from ...services.base_service import BaseService
+from spiritual_voice_agent.services.base_service import BaseService
 
 class BaseSTTService(BaseService):
     """Base class for Speech-to-Text services."""

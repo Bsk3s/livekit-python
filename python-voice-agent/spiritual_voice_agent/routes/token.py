@@ -5,7 +5,7 @@ import uuid
 import time
 from datetime import datetime, timedelta
 import logging
-from app.services.livekit_token import create_spiritual_access_token
+from spiritual_voice_agent.services.livekit_token import create_spiritual_access_token
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

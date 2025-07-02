@@ -13,10 +13,10 @@ import re
 from datetime import datetime
 
 # Import existing services
-from ..services.stt.implementations.direct_deepgram import DirectDeepgramSTTService
-from ..services.llm_service import create_gpt4o_mini
-from ..services.openai_tts_service import OpenAITTSService
-from ..characters.character_factory import CharacterFactory
+from spiritual_voice_agent.services.stt.implementations.direct_deepgram import DirectDeepgramSTTService
+from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
+from spiritual_voice_agent.services.tts_factory import TTSFactory
+from spiritual_voice_agent.characters.character_factory import CharacterFactory
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -176,7 +176,7 @@ class AudioSession:
             
             # TTS Service - OpenAI with character voice
             character_config = CharacterFactory.get_character_config(self.character)
-            self.tts_service = OpenAITTSService()
+            self.tts_service = TTSFactory.create_tts("default")
             
             # Set initial conversation state
             self.conversation_state = "LISTENING"

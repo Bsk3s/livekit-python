@@ -10,7 +10,7 @@ import aiohttp
 import json
 from typing import Dict, Any, Optional
 
-from ..base import BaseSTTService
+from spiritual_voice_agent.services.stt.base import BaseSTTService
 
 logger = logging.getLogger(__name__)
 
