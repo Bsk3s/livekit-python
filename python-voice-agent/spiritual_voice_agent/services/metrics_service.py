@@ -50,7 +50,12 @@ class MetricsEvent:
     source: str  # 'websocket' or 'livekit_agent'
 
 class MetricsService:
-    """Centralized metrics collection and storage"""
+    """
+    Centralized metrics collection and storage with cost analytics integration.
+    
+    Enhanced to include cost tracking from the separate cost analytics system
+    that runs with zero voice pipeline impact.
+    """
     
     def __init__(self, log_dir: str = "logs/metrics"):
         self.log_dir = Path(log_dir)
@@ -65,6 +70,9 @@ class MetricsService:
         # In-memory cache for dashboard (last 1000 events)
         self._recent_events: List[MetricsEvent] = []
         self._max_cache_size = 1000
+        
+        # Cost analytics integration (lazy-loaded to avoid import cycles)
+        self._cost_analytics_db = None
         
         logger.info(f"📊 MetricsService initialized - logging to {self.log_dir}")
 
@@ -184,14 +192,69 @@ class MetricsService:
             stage_breakdown = {}
             character_perf = {}
 
+        # Add cost analytics data
+        cost_summary = self._get_cost_summary(hours)
+
         return {
             "total_requests": total_requests,
             "success_rate": success_rate,
             "avg_latency_ms": avg_latency,
             "stage_breakdown": stage_breakdown,
             "character_performance": character_perf,
+            "cost_analytics": cost_summary,
             "time_period_hours": hours
         }
+
+    def _get_cost_analytics_db(self):
+        """Get cost analytics database instance (lazy-loaded)"""
+        if self._cost_analytics_db is None:
+            try:
+                # Import here to avoid circular dependencies
+                from spiritual_voice_agent.services.cost_analytics import get_cost_analytics_db
+                self._cost_analytics_db = get_cost_analytics_db()
+            except ImportError as e:
+                logger.warning(f"📊 Cost analytics not available: {e}")
+                return None
+        return self._cost_analytics_db
+
+    def _get_cost_summary(self, hours: int = 1) -> Dict[str, Any]:
+        """Get cost summary from cost analytics database"""
+        try:
+            cost_db = self._get_cost_analytics_db()
+            if cost_db is None:
+                return {
+                    "total_cost": 0.0,
+                    "cost_breakdown": {"stt": 0.0, "llm": 0.0, "tts": 0.0},
+                    "avg_cost_per_turn": 0.0,
+                    "available": False
+                }
+            
+            # Convert hours to days for cost analytics query
+            days = max(1, hours // 24) if hours >= 24 else 1
+            cost_data = cost_db.get_cost_summary(days)
+            
+            return {
+                "total_cost": cost_data.get("total_cost", 0.0),
+                "cost_breakdown": {
+                    "stt": cost_data.get("total_stt_cost", 0.0),
+                    "llm": cost_data.get("total_llm_cost", 0.0),
+                    "tts": cost_data.get("total_tts_cost", 0.0)
+                },
+                "avg_cost_per_turn": cost_data.get("avg_cost_per_turn", 0.0),
+                "total_conversations": cost_data.get("total_conversations", 0),
+                "unique_users": cost_data.get("unique_users", 0),
+                "available": True
+            }
+            
+        except Exception as e:
+            logger.warning(f"📊 Failed to get cost summary: {e}")
+            return {
+                "total_cost": 0.0,
+                "cost_breakdown": {"stt": 0.0, "llm": 0.0, "tts": 0.0},
+                "avg_cost_per_turn": 0.0,
+                "available": False,
+                "error": str(e)
+            }
 
     async def cleanup_old_logs(self) -> None:
         """Remove log files older than retention_days"""

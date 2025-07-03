@@ -13,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import routes - no more sys.path hacks needed!
-from spiritual_voice_agent.routes import token, websocket_audio, metrics
+from spiritual_voice_agent.routes import token, websocket_audio, metrics, cost
 
 
 @asynccontextmanager
@@ -94,6 +94,7 @@ async def root():
             "token": "/api/spiritual-token",
             "legacy_token": "/api/createToken",
             "metrics": "/metrics",
+            "cost": "/cost",
         },
         "docs": "/docs",
     }
@@ -103,6 +104,7 @@ async def root():
 app.include_router(token.router, prefix="/api", tags=["Authentication"])
 app.include_router(websocket_audio.router, tags=["WebSocket Audio"])
 app.include_router(metrics.router, tags=["Metrics"])
+app.include_router(cost.router, tags=["Cost Analytics"])
 
 
 def main():

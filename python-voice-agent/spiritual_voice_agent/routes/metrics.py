@@ -29,6 +29,19 @@ async def metrics_dashboard():
     adina_display = f"{adina_stats.get('avg_latency_ms', 0):.0f}ms ({adina_stats.get('requests', 0)} requests)" if adina_stats else "No data"
     raffa_display = f"{raffa_stats.get('avg_latency_ms', 0):.0f}ms ({raffa_stats.get('requests', 0)} requests)" if raffa_stats else "No data"
     
+    # Cost analytics display
+    cost_analytics = summary.get('cost_analytics', {})
+    if cost_analytics.get('available', False):
+        total_cost = cost_analytics.get('total_cost', 0.0)
+        avg_cost = cost_analytics.get('avg_cost_per_turn', 0.0)
+        cost_breakdown = cost_analytics.get('cost_breakdown', {})
+        
+        cost_display = f"${total_cost:.4f}"
+        cost_breakdown_display = f"Avg: ${avg_cost:.4f}/turn | STT: ${cost_breakdown.get('stt', 0):.4f} | LLM: ${cost_breakdown.get('llm', 0):.4f} | TTS: ${cost_breakdown.get('tts', 0):.4f}"
+    else:
+        cost_display = "Calculating..."
+        cost_breakdown_display = "Cost tracking system starting up"
+    
     # Determine status colors
     def get_status_color(latency_ms):
         if latency_ms == 0:
@@ -207,6 +220,12 @@ async def metrics_dashboard():
                         <strong>Adina:</strong> {adina_display}<br>
                         <strong>Raffa:</strong> {raffa_display}
                     </div>
+                </div>
+                
+                <div class="metric-card">
+                    <div class="metric-label">💰 Cost Analytics</div>
+                    <div class="metric-value">{cost_display}</div>
+                    <div style="font-size: 12px; color: #64748b;">{cost_breakdown_display}</div>
                 </div>
             </div>
             
