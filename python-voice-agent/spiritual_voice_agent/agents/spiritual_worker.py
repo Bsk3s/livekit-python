@@ -53,6 +53,15 @@ from spiritual_voice_agent.characters.character_factory import CharacterFactory
 # Import our services - clean imports, no sys.path hacks!
 from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
 
+# Import metrics service for performance tracking
+from spiritual_voice_agent.services.metrics_service import (
+    get_metrics_service,
+    PipelineMetrics,
+    QualityMetrics,
+    ContextMetrics,
+    timing_context,
+)
+
 
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
@@ -60,6 +69,11 @@ class SpiritualAgentWorker:
     def __init__(self):
         self.active_sessions: Dict[str, AgentSession] = {}
         self.shutdown_requested = False
+        
+        # 📊 METRICS TRACKING - Performance measurement
+        self._metrics_service = get_metrics_service()
+        self._conversation_timings: Dict[str, Dict] = {}  # Track timing per room
+        self._session_start_times: Dict[str, float] = {}  # Track session start times
 
         # Validate environment variables
         self._validate_environment()
@@ -85,6 +99,81 @@ class SpiritualAgentWorker:
             raise ValueError(f"Missing environment variables: {missing_vars}")
 
         logger.info("✅ All required environment variables present")
+
+    def _start_conversation_timing(self, room_name: str) -> None:
+        """Start timing a new conversation in a room"""
+        import time
+        
+        self._conversation_timings[room_name] = {
+            "turn_start_time": time.perf_counter(),
+            "stage_timings": {}
+        }
+        logger.debug(f"📊 Started timing for room: {room_name}")
+
+    def _record_stage_timing(self, room_name: str, stage: str, duration_ms: float) -> None:
+        """Record timing for a specific pipeline stage"""
+        if room_name in self._conversation_timings:
+            self._conversation_timings[room_name]["stage_timings"][stage] = duration_ms
+            logger.debug(f"📊 {room_name} - {stage}: {duration_ms:.1f}ms")
+
+    async def _log_agent_metrics_event(self, room_name: str, character_name: str, success: bool, 
+                                      user_input: str = "", ai_response: str = "", 
+                                      error_message: str = None) -> None:
+        """Log a complete metrics event for LiveKit agent"""
+        if room_name not in self._conversation_timings:
+            return  # No timing data to log
+        
+        try:
+            import time
+            
+            # Calculate total turn time
+            turn_data = self._conversation_timings[room_name]
+            total_latency_ms = (time.perf_counter() - turn_data["turn_start_time"]) * 1000
+            
+            # Get TTS model info (simplified for LiveKit agent)
+            tts_model = os.getenv("TTS_MODEL", "openai").lower()
+            
+            # Create metrics objects
+            pipeline_metrics = PipelineMetrics(
+                total_latency_ms=total_latency_ms,
+                stt_latency_ms=turn_data["stage_timings"].get("stt"),
+                llm_latency_ms=turn_data["stage_timings"].get("llm"),
+                tts_first_chunk_ms=turn_data["stage_timings"].get("tts"),
+                audio_processing_ms=turn_data["stage_timings"].get("audio_processing")
+            )
+            
+            quality_metrics = QualityMetrics(
+                success=success,
+                error_message=error_message
+            )
+            
+            # Calculate session duration
+            session_duration = 0
+            if room_name in self._session_start_times:
+                session_duration = time.time() - self._session_start_times[room_name]
+            
+            context_metrics = ContextMetrics(
+                user_input_length=len(user_input),
+                ai_response_length=len(ai_response),
+                session_duration_s=session_duration,
+                conversation_turn=len([r for r in self._conversation_timings if r == room_name])
+            )
+            
+            # Log the event
+            await self._metrics_service.log_event(
+                session_id=room_name,  # Use room name as session ID for LiveKit
+                character=character_name,
+                tts_model=tts_model,
+                pipeline_metrics=pipeline_metrics,
+                quality_metrics=quality_metrics,
+                context_metrics=context_metrics,
+                source="livekit_agent"
+            )
+            
+            logger.debug(f"📊 LiveKit metrics logged for {room_name}: {total_latency_ms:.0f}ms total")
+            
+        except Exception as e:
+            logger.warning(f"📊 Failed to log LiveKit metrics: {e}")  # Don't let metrics break the agent
 
     async def entrypoint(self, ctx: JobContext):
         """Main agent entry point - spawns character instances"""
@@ -238,6 +327,10 @@ class SpiritualAgentWorker:
 
             # Track active session
             self.active_sessions[room_name] = session
+            
+            # 📊 METRICS: Track session start time
+            import time
+            self._session_start_times[room_name] = time.time()
 
             logger.info(
                 f"✨ {character_name.title()} is ready for spiritual guidance in {room_name}"
@@ -331,21 +424,79 @@ class SpiritualAgentWorker:
         return greetings.get(character, greetings["adina"])
 
     def _on_user_transcribed(self, event):
-        """Handle user speech transcription"""
+        """Handle user speech transcription with metrics tracking"""
         if event.is_final:
             logger.info(f"👤 User: '{event.transcript}'")
+            
+            # 📊 METRICS: Start timing for this conversation turn
+            # Extract room name from event context
+            room_name = getattr(event, 'room_name', 'unknown_room')
+            if hasattr(event, 'session') and hasattr(event.session, 'room'):
+                room_name = event.session.room.name
+            
+            self._start_conversation_timing(room_name)
 
     def _on_agent_state_changed(self, event):
-        """Handle agent state changes"""
+        """Handle agent state changes with metrics tracking"""
         logger.info(f"🤖 Agent state: {event.old_state} → {event.new_state}")
+        
+        # 📊 METRICS: Track timing for different agent states
+        if hasattr(event, 'session') and hasattr(event.session, 'room'):
+            room_name = event.session.room.name
+            
+            # Track different processing stages based on state changes
+            if event.new_state == "thinking":
+                # LLM processing started
+                pass  # Start time already captured in user_transcribed
+            elif event.new_state == "speaking":
+                # TTS processing started (LLM finished)
+                if room_name in self._conversation_timings:
+                    # Estimate LLM completion time (simplified)
+                    import time
+                    current_time = time.perf_counter()
+                    start_time = self._conversation_timings[room_name]["turn_start_time"]
+                    llm_duration = (current_time - start_time) * 1000
+                    self._record_stage_timing(room_name, "llm", llm_duration)
 
     def _on_speech_created(self, event):
-        """Handle speech creation"""
+        """Handle speech creation with metrics tracking"""
         logger.debug(f"🗣️ Speech created: {event.source}")
+        
+        # 📊 METRICS: Track TTS start time
+        if hasattr(event, 'session') and hasattr(event.session, 'room'):
+            room_name = event.session.room.name
+            if room_name in self._conversation_timings:
+                import time
+                self._conversation_timings[room_name]["tts_start_time"] = time.perf_counter()
 
     def _on_speech_finished(self, event):
-        """Handle speech completion"""
+        """Handle speech completion with metrics tracking"""
         logger.info(f"✅ Speech finished: interrupted={event.interrupted}")
+        
+        # 📊 METRICS: Complete the conversation turn and log metrics
+        if hasattr(event, 'session') and hasattr(event.session, 'room'):
+            room_name = event.session.room.name
+            
+            # Calculate TTS timing
+            if (room_name in self._conversation_timings and 
+                "tts_start_time" in self._conversation_timings[room_name]):
+                import time
+                tts_duration = (time.perf_counter() - 
+                              self._conversation_timings[room_name]["tts_start_time"]) * 1000
+                self._record_stage_timing(room_name, "tts", tts_duration)
+            
+            # Log the complete metrics event (simplified for LiveKit)
+            character_name = self._extract_character_from_room(room_name) or "unknown"
+            
+            # Create async task to log metrics (don't block the agent)
+            import asyncio
+            asyncio.create_task(self._log_agent_metrics_event(
+                room_name=room_name,
+                character_name=character_name,
+                success=not event.interrupted,  # Success if not interrupted
+                user_input="",  # Would need to track from transcription
+                ai_response="",  # Would need to track from speech generation
+            ))
 
     def setup_signal_handlers(self):
         """Setup graceful shutdown handlers"""

@@ -13,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import routes - no more sys.path hacks needed!
-from spiritual_voice_agent.routes import token, websocket_audio
+from spiritual_voice_agent.routes import token, websocket_audio, metrics
 
 
 @asynccontextmanager
@@ -22,6 +22,13 @@ async def lifespan(app: FastAPI):
     logger.info("🌟 Spiritual Guidance API starting up")
     logger.info(f"🔗 Environment: {os.getenv('ENVIRONMENT', 'development')}")
     logger.info(f"🎭 Available characters: Adina (compassionate), Raffa (wise)")
+    
+    # 📊 METRICS: Initialize metrics service and cleanup old logs
+    from spiritual_voice_agent.services.metrics_service import get_metrics_service
+    metrics_service = get_metrics_service()
+    await metrics_service.cleanup_old_logs()
+    logger.info("📊 Metrics service initialized and old logs cleaned up")
+    
     yield
     # Shutdown
     logger.info("👋 Spiritual Guidance API shutting down")
@@ -86,6 +93,7 @@ async def root():
             "websocket": "/ws/audio",
             "token": "/api/spiritual-token",
             "legacy_token": "/api/createToken",
+            "metrics": "/metrics",
         },
         "docs": "/docs",
     }
@@ -94,6 +102,7 @@ async def root():
 # Include routers
 app.include_router(token.router, prefix="/api", tags=["Authentication"])
 app.include_router(websocket_audio.router, tags=["WebSocket Audio"])
+app.include_router(metrics.router, tags=["Metrics"])
 
 
 def main():
