@@ -1011,6 +1011,46 @@ class AudioSession:
             )
 
             audio_data = await response.aread()
+            
+            # 🔍 DETAILED BYTE ANALYSIS
+            logger.info(f"🎵 Fallback TTS generated: {len(audio_data)} bytes")
+            
+            # Check first 20 bytes to identify format
+            first_20_bytes = audio_data[:20] if len(audio_data) >= 20 else audio_data
+            first_20_hex = ' '.join(f'{b:02x}' for b in first_20_bytes)
+            first_20_ascii = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in first_20_bytes)
+            
+            logger.info(f"🔍 BYTE ANALYSIS: First 20 bytes hex: {first_20_hex}")
+            logger.info(f"🔍 BYTE ANALYSIS: First 20 bytes ASCII: {first_20_ascii}")
+            
+            # Check for common audio format signatures
+            is_wav = len(audio_data) >= 4 and audio_data[:4] == b'RIFF'
+            is_mp3 = len(audio_data) >= 3 and (audio_data[:3] == b'ID3' or (audio_data[0] == 0xFF and (audio_data[1] & 0xE0) == 0xE0))
+            is_aac = len(audio_data) >= 2 and audio_data[:2] == b'\xff\xf1'
+            
+            logger.info(f"🔍 FORMAT DETECTION: WAV={is_wav}, MP3={is_mp3}, AAC={is_aac}")
+            
+            # If it's WAV, check the header details
+            if is_wav and len(audio_data) >= 44:
+                try:
+                    import struct
+                    # Parse WAV header
+                    riff, size, wave = struct.unpack('<4sI4s', audio_data[:12])
+                    fmt, fmt_size, audio_format, channels, sample_rate, byte_rate, block_align, bits_per_sample = struct.unpack('<4sIHHIIHH', audio_data[12:36])
+                    
+                    logger.info(f"🔍 WAV HEADER: Sample Rate={sample_rate}, Channels={channels}, Bits={bits_per_sample}, Format={audio_format}")
+                    
+                    # Check if it's iOS compatible
+                    ios_compatible = (sample_rate in [8000, 16000, 22050, 44100, 48000] and 
+                                    channels in [1, 2] and 
+                                    bits_per_sample in [8, 16, 24, 32] and
+                                    audio_format == 1)  # PCM
+                    
+                    logger.info(f"🔍 iOS COMPATIBILITY: {ios_compatible}")
+                    
+                except Exception as e:
+                    logger.error(f"🔍 WAV HEADER PARSE ERROR: {e}")
+            
             logger.info(f"🎵 Fallback TTS generated: {len(audio_data)} bytes")
             return audio_data
 
