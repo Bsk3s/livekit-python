@@ -211,6 +211,19 @@ class AudioSession:
         self._last_speech_time = 0  # Track when we last detected speech
         self._speech_cooldown = 0.1  # Seconds to wait after speech before resetting (was 2.0)
 
+        # 🎯 ADAPTIVE BUFFERING SYSTEM - Balance speed and accuracy
+        self._adaptive_buffer_config = {
+            'quick_response_threshold': 20000,    # 20KB - Fast response for short phrases
+            'normal_speech_threshold': 50000,     # 50KB - Standard speech processing
+            'long_thought_threshold': 100000,     # 100KB - Longer thoughts/statements
+            'max_buffer_size': 150000,            # 150KB - Absolute maximum
+            'silence_detection_ms': 800,          # 800ms silence = speech complete
+            'min_speech_duration_ms': 300,        # 300ms minimum speech before processing
+        }
+        self._speech_start_time = None  # Track when speech started
+        self._last_high_energy_time = None  # Track last high energy moment
+        self._buffer_processing_mode = 'quick'  # quick, normal, long_thought
+
         # Performance monitoring for VAD decoupling
         self._performance_metrics = {
             'vad_processing_times': [],
@@ -220,7 +233,13 @@ class AudioSession:
             'transcription_attempts': 0,
             'chunk_count': 0,
             'interruptions': 0,
-            'interruption_latencies': []
+            'interruption_latencies': [],
+            'adaptive_buffer_decisions': {
+                'quick_responses': 0,
+                'normal_speech': 0,
+                'long_thoughts': 0,
+                'buffer_timeouts': 0
+            }
         }
 
         # 🎯 INTERRUPTION SYSTEM - Real-time conversation control
@@ -502,6 +521,9 @@ class AudioSession:
             # ✅ ALWAYS-ON VAD: Always perform speech detection regardless of conversation state
             speech_detected = self._detect_sustained_speech(audio_energy, current_time)
 
+            # 🎯 ADAPTIVE BUFFERING: Update speech tracking for smart buffer decisions
+            self._update_speech_tracking(audio_energy, current_time)
+
             # ✅ ALWAYS-ON VAD: Always emit speech detection events (with state context)
             if speech_detected and not self._processing_audio:
                 self._processing_audio = True
@@ -560,37 +582,9 @@ class AudioSession:
                 logger.debug(f"🔍 VAD-only processing: {chunk_duration_ms:.2f}ms (active: {self.session_active}, state: {self.conversation_state})")
                 return None
 
-            # TRANSCRIPTION PROCESSING: Only when in LISTENING state
-            # Smart buffer processing - process when we have enough data AND speech was detected
+            # 🎯 ADAPTIVE BUFFERING: Smart buffer processing with speed/accuracy balance
             buffer_size = len(self._audio_buffer)
-            min_buffer_size = 16000  # ~0.5 seconds at 16kHz 16-bit
-            max_buffer_size = 64000  # ~2 seconds at 16kHz 16-bit
-
-            should_process = False
-
-            if self._processing_audio and buffer_size >= min_buffer_size:
-                # Process if we detected speech and have minimum data
-                should_process = True
-                process_reason = f"speech detected + {buffer_size} bytes"
-            elif buffer_size >= max_buffer_size:
-                # Process if buffer is getting too large (prevent memory issues)
-                should_process = True
-                process_reason = f"max buffer reached: {buffer_size} bytes"
-
-            # Skip processing if no recent high energy (likely just noise)
-            recent_avg_energy = (
-                sum(self._recent_energy_levels[-5:]) / min(5, len(self._recent_energy_levels))
-                if self._recent_energy_levels
-                else 0
-            )
-            if should_process and recent_avg_energy < (self._energy_threshold * 0.3):  # Lowered from 0.6 for real mic sensitivity
-                logger.debug(
-                    f"🔇 Skipping processing - recent avg energy too low: {recent_avg_energy:.1f}"
-                )
-                should_process = False
-                # Clear buffer of likely noise
-                self._audio_buffer.clear()
-                self._processing_audio = False
+            should_process, process_reason, processing_mode = self._should_process_buffer(buffer_size, current_time)
 
             if should_process:
                 # Track transcription attempt
@@ -608,9 +602,12 @@ class AudioSession:
                 # Reset processing flag for next audio chunk
                 self._processing_audio = False
 
-                logger.info(f"📝 Processing audio buffer: {process_reason}")
+                # Get adaptive timeout based on processing mode
+                timeout_seconds = self._get_processing_timeout(processing_mode)
+                
+                logger.info(f"📝 Processing audio buffer: {process_reason} (mode: {processing_mode}, timeout: {timeout_seconds}s)")
 
-                # 🛡️ RELIABILITY: Critical operation with timeout protection
+                # 🛡️ RELIABILITY: Critical operation with adaptive timeout protection
                 try:
                     # Convert raw PCM to WAV format for Deepgram
                     wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
@@ -624,16 +621,17 @@ class AudioSession:
                                 "message": "Processing your speech...",
                                 "buffer_size": len(audio_bytes),
                                 "conversation_state": self.conversation_state,
+                                "processing_mode": processing_mode,
                                 "timestamp": datetime.now().isoformat(),
                             }
                         )
                     logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
 
-                    # 🛡️ CRITICAL: STT call with aggressive timeout 
-                    logger.debug(f"🛡️ Starting STT transcription...")
+                    # 🛡️ CRITICAL: STT call with adaptive timeout 
+                    logger.debug(f"🛡️ Starting STT transcription (mode: {processing_mode}, timeout: {timeout_seconds}s)...")
                     transcription = await asyncio.wait_for(
                         self.stt_service.transcribe_audio_bytes(wav_audio),
-                        timeout=5.0  # Reduced to 5s - aggressive timeout
+                        timeout=timeout_seconds
                     )
                     logger.debug(f"🛡️ STT transcription completed")
 
@@ -684,8 +682,8 @@ class AudioSession:
                         self._set_state("LISTENING")
 
                 except asyncio.TimeoutError:
-                    logger.error(f"🛡️ STT timeout after 5s - forcing reset")
-                    self._force_reset_state("LISTENING", "stt_timeout")
+                    logger.error(f"🛡️ STT timeout after {timeout_seconds}s (mode: {processing_mode}) - forcing reset")
+                    self._force_reset_state("LISTENING", f"stt_timeout_{processing_mode}")
                     
                 except Exception as stt_error:
                     logger.error(f"🛡️ STT processing failed: {stt_error}")
@@ -771,36 +769,179 @@ class AudioSession:
         return len(recent_high_energy_chunks) >= self._min_sustained_chunks
 
     def _calculate_speech_confidence(self) -> float:
-        """Calculate confidence score based on energy patterns"""
+        """
+        Calculate confidence level for speech detection based on energy consistency.
+        Higher confidence = more likely to be actual speech vs noise.
+        """
         if not self._recent_energy_levels:
             return 0.0
 
-        # Get recent measurements
-        recent_energies = self._recent_energy_levels[-self._min_sustained_chunks :]
-        if not recent_energies:
-            return 0.0
+        # Calculate energy consistency (how stable the energy levels are)
+        recent_energies = self._recent_energy_levels[-5:]  # Last 5 measurements
+        if len(recent_energies) < 3:
+            return 0.5  # Default confidence for insufficient data
 
-        # Calculate average energy over threshold
-        avg_energy = sum(recent_energies) / len(recent_energies)
+        # Calculate energy variance (lower variance = more consistent = higher confidence)
+        mean_energy = sum(recent_energies) / len(recent_energies)
+        variance = sum((e - mean_energy) ** 2 for e in recent_energies) / len(recent_energies)
+        
+        # Normalize variance to 0-1 scale (lower variance = higher confidence)
+        max_variance = mean_energy * 2  # Reasonable maximum variance
+        consistency_score = max(0, 1 - (variance / max_variance))
+        
+        # Calculate energy level score (higher energy = higher confidence)
+        energy_score = min(1.0, mean_energy / (self._energy_threshold * 2))
+        
+        # Combine scores (consistency is more important than absolute energy)
+        confidence = (consistency_score * 0.7) + (energy_score * 0.3)
+        
+        return min(1.0, max(0.0, confidence))
 
-        # Calculate consistency (lower standard deviation = more consistent = higher confidence)
-        if len(recent_energies) > 1:
-            import math
+    # 🎯 ADAPTIVE BUFFERING METHODS - Smart buffer management
+    def _should_process_buffer(self, buffer_size: int, current_time: float) -> tuple[bool, str, str]:
+        """
+        Determine if audio buffer should be processed based on adaptive thresholds.
+        
+        Returns:
+            (should_process, reason, mode)
+        """
+        config = self._adaptive_buffer_config
+        
+        # Check if we have any speech at all
+        if not self._speech_start_time:
+            return False, "no_speech_started", "none"
+        
+        speech_duration = (current_time - self._speech_start_time) * 1000  # Convert to ms
+        
+        # Check minimum speech duration
+        if speech_duration < config['min_speech_duration_ms']:
+            return False, f"speech_too_short_{speech_duration:.0f}ms", "none"
+        
+        # Check for silence (speech complete)
+        silence_duration = 0
+        if self._last_high_energy_time:
+            silence_duration = (current_time - self._last_high_energy_time) * 1000
+        
+        # Quick response mode: Small buffer + silence detection
+        if buffer_size >= config['quick_response_threshold'] and silence_duration >= config['silence_detection_ms']:
+            self._buffer_processing_mode = 'quick'
+            self._performance_metrics['adaptive_buffer_decisions']['quick_responses'] += 1
+            return True, f"quick_response_{buffer_size}bytes_{silence_duration:.0f}ms_silence", 'quick'
+        
+        # Normal speech mode: Medium buffer + silence detection
+        if buffer_size >= config['normal_speech_threshold'] and silence_duration >= config['silence_detection_ms']:
+            self._buffer_processing_mode = 'normal'
+            self._performance_metrics['adaptive_buffer_decisions']['normal_speech'] += 1
+            return True, f"normal_speech_{buffer_size}bytes_{silence_duration:.0f}ms_silence", 'normal'
+        
+        # Long thought mode: Large buffer + silence detection
+        if buffer_size >= config['long_thought_threshold'] and silence_duration >= config['silence_detection_ms']:
+            self._buffer_processing_mode = 'long_thought'
+            self._performance_metrics['adaptive_buffer_decisions']['long_thoughts'] += 1
+            return True, f"long_thought_{buffer_size}bytes_{silence_duration:.0f}ms_silence", 'long_thought'
+        
+        # Emergency timeout: Prevent buffer overflow
+        if buffer_size >= config['max_buffer_size']:
+            self._buffer_processing_mode = 'timeout'
+            self._performance_metrics['adaptive_buffer_decisions']['buffer_timeouts'] += 1
+            return True, f"buffer_timeout_{buffer_size}bytes", 'timeout'
+        
+        return False, f"waiting_{buffer_size}bytes_{silence_duration:.0f}ms_silence", "waiting"
 
-            variance = sum((e - avg_energy) ** 2 for e in recent_energies) / len(recent_energies)
-            std_dev = math.sqrt(variance)
-            consistency = max(0, 1 - (std_dev / avg_energy)) if avg_energy > 0 else 0
-        else:
-            consistency = 1.0
+    def _update_speech_tracking(self, audio_energy: float, current_time: float):
+        """
+        Update speech tracking for adaptive buffering decisions.
+        """
+        # Track speech start
+        if audio_energy > self._energy_threshold and not self._speech_start_time:
+            self._speech_start_time = current_time
+            logger.debug(f"🎤 Speech started at {current_time}")
+        
+        # Track last high energy moment
+        if audio_energy > self._energy_threshold:
+            self._last_high_energy_time = current_time
+        
+        # Reset speech tracking if no energy for a while
+        if self._last_high_energy_time and (current_time - self._last_high_energy_time) > 2.0:
+            self._speech_start_time = None
+            self._last_high_energy_time = None
+            logger.debug(f"🎤 Speech tracking reset - no energy for 2s")
 
-        # Base confidence on energy level above threshold
-        energy_ratio = min(avg_energy / self._energy_threshold, 3.0)  # Cap at 3x threshold
-        energy_confidence = min(0.9, energy_ratio / 3.0)
+    def _get_processing_timeout(self, mode: str) -> float:
+        """
+        Get appropriate timeout for different processing modes.
+        """
+        timeouts = {
+            'quick': 3.0,      # 3s for short phrases
+            'normal': 5.0,     # 5s for normal speech
+            'long_thought': 8.0,  # 8s for longer thoughts
+            'timeout': 5.0     # 5s for emergency processing
+        }
+        return timeouts.get(mode, 5.0)
 
-        # Combine energy confidence with consistency
-        final_confidence = (energy_confidence * 0.7) + (consistency * 0.3)
+    def get_adaptive_buffer_stats(self) -> dict:
+        """
+        Get adaptive buffering statistics for monitoring and debugging.
+        """
+        config = self._adaptive_buffer_config
+        current_time = time.time()
+        
+        # Calculate current speech duration
+        speech_duration_ms = 0
+        if self._speech_start_time:
+            speech_duration_ms = (current_time - self._speech_start_time) * 1000
+        
+        # Calculate current silence duration
+        silence_duration_ms = 0
+        if self._last_high_energy_time:
+            silence_duration_ms = (current_time - self._last_high_energy_time) * 1000
+        
+        return {
+            'buffer_size': len(self._audio_buffer),
+            'processing_mode': self._buffer_processing_mode,
+            'speech_started': self._speech_start_time is not None,
+            'speech_duration_ms': speech_duration_ms,
+            'silence_duration_ms': silence_duration_ms,
+            'config': config,
+            'performance_metrics': self._performance_metrics['adaptive_buffer_decisions']
+        }
 
-        return min(0.95, max(0.1, final_confidence))
+    def configure_adaptive_buffering(self, 
+                                   quick_response_threshold: int = None,
+                                   normal_speech_threshold: int = None,
+                                   long_thought_threshold: int = None,
+                                   max_buffer_size: int = None,
+                                   silence_detection_ms: int = None,
+                                   min_speech_duration_ms: int = None):
+        """
+        Configure adaptive buffering parameters dynamically.
+        
+        Args:
+            quick_response_threshold: 20KB default - Fast response for short phrases
+            normal_speech_threshold: 50KB default - Standard speech processing
+            long_thought_threshold: 100KB default - Longer thoughts/statements
+            max_buffer_size: 150KB default - Absolute maximum buffer size
+            silence_detection_ms: 800ms default - Silence duration to consider speech complete
+            min_speech_duration_ms: 300ms default - Minimum speech duration before processing
+        """
+        config = self._adaptive_buffer_config
+        
+        if quick_response_threshold is not None:
+            config['quick_response_threshold'] = quick_response_threshold
+        if normal_speech_threshold is not None:
+            config['normal_speech_threshold'] = normal_speech_threshold
+        if long_thought_threshold is not None:
+            config['long_thought_threshold'] = long_thought_threshold
+        if max_buffer_size is not None:
+            config['max_buffer_size'] = max_buffer_size
+        if silence_detection_ms is not None:
+            config['silence_detection_ms'] = silence_detection_ms
+        if min_speech_duration_ms is not None:
+            config['min_speech_duration_ms'] = min_speech_duration_ms
+        
+        logger.info(f"🎯 Adaptive buffering configured: {config}")
+        
+        return config
 
     async def _handle_potential_interruption(self, websocket: WebSocket, confidence: float, audio_energy: float, current_time: float):
         """
@@ -1841,9 +1982,35 @@ async def handle_json_message(
         elif message_type == "get_interruption_stats":
             if session:
                 stats = session.get_interruption_stats()
-                
                 await websocket.send_json({
                     "type": "interruption_stats",
+                    **stats,
+                    "timestamp": datetime.now().isoformat()
+                })
+
+        # 🎯 ADAPTIVE BUFFERING SYSTEM: Configuration and monitoring
+        elif message_type == "configure_adaptive_buffering":
+            if session:
+                config = session.configure_adaptive_buffering(
+                    quick_response_threshold=message.get("quick_response_threshold"),
+                    normal_speech_threshold=message.get("normal_speech_threshold"),
+                    long_thought_threshold=message.get("long_thought_threshold"),
+                    max_buffer_size=message.get("max_buffer_size"),
+                    silence_detection_ms=message.get("silence_detection_ms"),
+                    min_speech_duration_ms=message.get("min_speech_duration_ms")
+                )
+                
+                await websocket.send_json({
+                    "type": "adaptive_buffering_configured",
+                    "config": config,
+                    "timestamp": datetime.now().isoformat()
+                })
+
+        elif message_type == "get_adaptive_buffer_stats":
+            if session:
+                stats = session.get_adaptive_buffer_stats()
+                await websocket.send_json({
+                    "type": "adaptive_buffer_stats",
                     **stats,
                     "timestamp": datetime.now().isoformat()
                 })
