@@ -476,6 +476,11 @@ class AudioSession:
                 logger.info(
                     f"🎤 Audio energy: {audio_energy:.1f} | Avg: {avg_energy:.1f} | Threshold: {self._energy_threshold} | State: {self.conversation_state}"
                 )
+                
+                # 🔍 VALIDATION: Detailed energy analysis for real audio debugging
+                if audio_energy > 0:  # Only log when we have actual audio
+                    logger.info(f"🔍 VALIDATION: Energy analysis - Current: {audio_energy:.1f}, Threshold: {self._energy_threshold}, Above threshold: {audio_energy > self._energy_threshold}")
+                    logger.info(f"🔍 VALIDATION: Buffer size: {len(self._audio_buffer)} bytes, Recent energies: {self._recent_energy_levels[-3:] if len(self._recent_energy_levels) >= 3 else self._recent_energy_levels}")
 
             # ✅ ALWAYS-ON VAD: Always perform speech detection regardless of conversation state
             speech_detected = self._detect_sustained_speech(audio_energy, current_time)
@@ -1220,6 +1225,20 @@ class AudioSession:
                     if wav_audio and websocket.client_state == WebSocketState.CONNECTED:
                         chunk_duration = (time.time() - chunk_start_time) * 1000
 
+                        # 🔍 VALIDATION: Check WAV output format
+                        base64_audio = base64.b64encode(wav_audio).decode("utf-8")
+                        base64_length = len(base64_audio)
+                        
+                        # Decode and check WAV header
+                        try:
+                            decoded_wav = base64.b64decode(base64_audio)
+                            is_valid_wav = len(decoded_wav) >= 44 and decoded_wav[:4] == b'RIFF' and decoded_wav[8:12] == b'WAVE'
+                            wav_size = len(decoded_wav)
+                            logger.info(f"🔍 VALIDATION: WAV output - Size: {wav_size} bytes, Base64: {base64_length} chars, Valid WAV: {is_valid_wav}")
+                        except Exception as e:
+                            logger.error(f"🔍 VALIDATION: WAV decode error: {e}")
+                            is_valid_wav = False
+                        
                         # Send audio chunk immediately
                         await websocket.send_json(
                             {
@@ -1228,7 +1247,7 @@ class AudioSession:
                                 "total_chunks": len(chunks),
                                 "is_final": i == len(chunks) - 1,
                                 "text": chunk_text,
-                                "audio": base64.b64encode(wav_audio).decode("utf-8"),
+                                "audio": base64_audio,
                                 "character": self.character,
                                 "generation_time_ms": round(chunk_duration),
                                 "timestamp": datetime.now().isoformat(),
@@ -1504,7 +1523,20 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                 elif "bytes" in data:
                     # Handle binary audio data - ALWAYS process for VAD and interruption detection
                     audio_data = data["bytes"]
+                    
+                    # 🔍 VALIDATION: Check if receiving PCM vs WAV
+                    first_bytes = audio_data[:100] if len(audio_data) >= 100 else audio_data
+                    first_bytes_hex = ' '.join(f'{b:02x}' for b in first_bytes[:20])  # First 20 bytes as hex
+                    first_bytes_ascii = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in first_bytes[:20])  # ASCII representation
+                    
+                    # Check for WAV header signature
+                    is_wav = len(audio_data) >= 4 and audio_data[:4] == b'RIFF'
+                    
                     logger.info(f"🎯 AUDIO RECEIVED: {len(audio_data)} bytes, session={session is not None}")
+                    logger.info(f"🔍 VALIDATION: First 20 bytes hex: {first_bytes_hex}")
+                    logger.info(f"🔍 VALIDATION: First 20 bytes ASCII: {first_bytes_ascii}")
+                    logger.info(f"🔍 VALIDATION: Is WAV header: {is_wav} (should be False for raw PCM)")
+                    
                     if session:
                         logger.info(f"🎯 SESSION STATE: active={session.session_active}, conversation_state={session.conversation_state}, stt_service={session.stt_service is not None}")
                     
