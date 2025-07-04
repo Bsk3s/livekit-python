@@ -268,11 +268,11 @@ class AudioSession:
             self.llm_service = create_gpt4o_mini()
             logger.info(f"✅ LLM service initialized for session {self.session_id}")
 
-            # TTS Service - OpenAI with character voice
-            logger.info(f"🎵 Creating TTS service for session {self.session_id}")
+            # TTS Service - Using direct MP3 API (skip LiveKit plugin for iOS compatibility)
+            logger.info(f"🎵 Creating MP3 TTS service for session {self.session_id}")
             character_config = CharacterFactory.get_character_config(self.character)
-            self.tts_service = TTSFactory.create_tts("default")
-            logger.info(f"✅ TTS service initialized for session {self.session_id}")
+            self.tts_service = None  # Skip LiveKit plugin, use direct MP3 API
+            logger.info(f"✅ MP3 TTS service initialized for session {self.session_id}")
 
             # Set initial conversation state
             logger.info(f"🛡️ Setting initial state to LISTENING for session {self.session_id}")
