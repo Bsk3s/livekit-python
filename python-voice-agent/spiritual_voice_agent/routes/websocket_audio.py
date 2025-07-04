@@ -981,14 +981,8 @@ class AudioSession:
         try:
             logger.info(f"🎤 Starting WAV TTS synthesis for: '{text[:50]}...'")
 
-            # Use the WAV TTS service
-            if self.tts_service:
-                # Get the WAV audio data from the TTS service
-                # Since we're using WAV format, we need to extract the raw WAV data
-                return await self._get_wav_from_tts_service(text)
-            else:
-                # Fallback to direct API call
-                return await self._fallback_tts_synthesis(text)
+            # Use direct OpenAI API for WAV output (most reliable approach)
+            return await self._fallback_tts_synthesis(text)
 
         except Exception as e:
             logger.error(f"❌ WAV TTS synthesis error: {e}")
@@ -1000,19 +994,6 @@ class AudioSession:
             # Return empty bytes as fallback
             return b""
 
-    async def _get_wav_from_tts_service(self, text: str) -> bytes:
-        """Extract WAV data from the TTS service"""
-        try:
-            # For WAV TTS service, we need to get the raw WAV data
-            # This is a simplified approach - in practice, you'd need to modify the TTS service
-            # to return the raw WAV bytes instead of audio frames
-            
-            # For now, use the fallback method which we know works
-            return await self._fallback_tts_synthesis(text)
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to get WAV from TTS service: {e}")
-            return await self._fallback_tts_synthesis(text)
 
     async def _fallback_tts_synthesis(self, text: str) -> bytes:
         """Fallback TTS synthesis using direct OpenAI API (WAV format for iOS compatibility)"""

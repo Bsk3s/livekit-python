@@ -64,7 +64,10 @@ class WAVTTSService(tts.TTS):
             audio_data = await response.aread()
             logger.info(f"🎵 WAV TTS generated: {len(audio_data)} bytes")
             
-            # Convert WAV to LiveKit audio frames
+            # Store the WAV data for retrieval
+            self._last_wav_data = audio_data
+            
+            # Return a simple stream that yields the WAV data
             return tts.ChunkedStream(self._wav_to_audio_frames(audio_data))
 
         except Exception as e:
@@ -76,11 +79,11 @@ class WAVTTSService(tts.TTS):
         """Convert WAV data to LiveKit audio frames"""
         
         async def frame_generator():
-            # For now, create a simple audio frame with the WAV data
-            # In a full implementation, you'd decode the WAV to PCM first
+            # Store the WAV data for external access
+            self._last_wav_data = wav_data
             
-            # Create a dummy audio frame (this is a simplified approach)
-            # The actual audio processing will handle the WAV data directly
+            # Create a simple audio frame that represents the WAV data
+            # This is a placeholder - the actual WAV data is stored in _last_wav_data
             dummy_audio = np.zeros(1600, dtype=np.int16)  # 100ms at 16kHz
             
             frame = rtc.AudioFrame(
@@ -96,6 +99,10 @@ class WAVTTSService(tts.TTS):
             await asyncio.sleep(0.01)
 
         return frame_generator()
+
+    def get_last_wav_data(self) -> bytes:
+        """Get the last generated WAV data"""
+        return getattr(self, '_last_wav_data', b'')
 
     def _create_silence_stream(self) -> AsyncGenerator[rtc.AudioFrame, None]:
         """Create silence stream for error fallback"""
