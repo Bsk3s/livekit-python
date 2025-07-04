@@ -31,12 +31,16 @@ logger = logging.getLogger(__name__)
 def create_wav_header(
     sample_rate: int = 16000, num_channels: int = 1, bit_depth: int = 16, data_length: int = 0
 ) -> bytes:
-    """Create WAV file header for proper audio format"""
+    """Create WAV file header for iOS-compatible audio format"""
     # Calculate derived values
     byte_rate = sample_rate * num_channels * bit_depth // 8
     block_align = num_channels * bit_depth // 8
+    
+    # Ensure data length is even (required for proper alignment)
+    if data_length % 2 != 0:
+        data_length += 1
 
-    # WAV header structure
+    # WAV header structure - iOS compatible
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF",  # ChunkID
@@ -59,15 +63,28 @@ def create_wav_header(
 def pcm_to_wav(
     pcm_data: bytes, sample_rate: int = 16000, num_channels: int = 1, bit_depth: int = 16
 ) -> bytes:
-    """Convert raw PCM data to WAV format with proper headers"""
+    """Convert raw PCM data to iOS-compatible WAV format"""
     if not pcm_data:
         return b""
+
+    # Ensure PCM data is properly aligned (even number of bytes for 16-bit)
+    if len(pcm_data) % 2 != 0:
+        # Pad with zero if odd length
+        pcm_data = pcm_data + b'\x00'
+        logger.debug(f"🔧 Padded PCM data to even length: {len(pcm_data)} bytes")
 
     # Create WAV header
     header = create_wav_header(sample_rate, num_channels, bit_depth, len(pcm_data))
 
     # Combine header + data
     wav_data = header + pcm_data
+    
+    # Validate WAV format
+    if len(wav_data) >= 44 and wav_data[:4] == b'RIFF' and wav_data[8:12] == b'WAVE':
+        logger.debug(f"✅ Generated valid iOS-compatible WAV: {len(wav_data)} bytes")
+    else:
+        logger.warning(f"⚠️ Generated WAV may be invalid: {len(wav_data)} bytes")
+    
     return wav_data
 
 
