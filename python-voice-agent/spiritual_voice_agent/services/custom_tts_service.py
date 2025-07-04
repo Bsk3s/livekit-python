@@ -26,7 +26,9 @@ class MP3TTSService(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True
-            )
+            ),
+            sample_rate=16000,  # Standard sample rate for voice
+            num_channels=1      # Mono audio
         )
         
         self.character = character
