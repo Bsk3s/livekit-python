@@ -247,22 +247,47 @@ class DirectDeepgramSTTService(BaseSTTService):
             return None
 
         try:
-            logger.debug(f"🎤 Processing {len(audio_data)} bytes of audio")
+            logger.info(f"🎤 STT DEBUG: Processing {len(audio_data)} bytes of audio")
+            
+            # 🔍 DEBUG: Check audio format
+            if len(audio_data) >= 44:
+                if audio_data[:4] == b'RIFF' and audio_data[8:12] == b'WAVE':
+                    logger.info(f"🎤 STT DEBUG: Audio is valid WAV format")
+                    # Parse WAV header for debugging
+                    import struct
+                    try:
+                        riff, size, wave = struct.unpack('<4sI4s', audio_data[:12])
+                        fmt, fmt_size, audio_format, channels, sample_rate, byte_rate, block_align, bits_per_sample = struct.unpack('<4sIHHIIHH', audio_data[12:36])
+                        logger.info(f"🎤 STT DEBUG: WAV Header - Sample Rate: {sample_rate}, Channels: {channels}, Bits: {bits_per_sample}, Format: {audio_format}")
+                    except Exception as e:
+                        logger.warning(f"🎤 STT DEBUG: Could not parse WAV header: {e}")
+                else:
+                    logger.warning(f"🎤 STT DEBUG: Audio is NOT valid WAV format")
+            else:
+                logger.warning(f"🎤 STT DEBUG: Audio too short to be WAV: {len(audio_data)} bytes")
 
             # Ensure we have proper WAV format
             if not audio_data.startswith(b"RIFF"):
-                logger.debug("🔧 Converting PCM to WAV format")
+                logger.info("🔧 Converting PCM to WAV format")
                 # Assume 16kHz, 16-bit, mono PCM
                 audio_data = self._create_wav_file(audio_data, 16000, 1, 16)
+                logger.info(f"🔧 Converted to WAV: {len(audio_data)} bytes")
+
+            # 🔍 DEBUG: Check final audio format
+            logger.info(f"🎤 STT DEBUG: Final audio size: {len(audio_data)} bytes")
+            if len(audio_data) >= 44:
+                logger.info(f"🎤 STT DEBUG: Final audio starts with: {audio_data[:20].hex()}")
 
             # Transcribe using HTTP API
+            logger.info(f"🎤 STT DEBUG: Calling Deepgram API...")
             transcript = await self._transcribe_with_api(audio_data)
+            logger.info(f"🎤 STT DEBUG: Deepgram API returned: {repr(transcript)}")
 
             if transcript and transcript.strip():
                 logger.info(f"👤 Transcribed: '{transcript}'")
                 return transcript.strip()
             else:
-                logger.debug("🔇 No speech detected in audio")
+                logger.info("🔇 No speech detected in audio")
                 return None
 
         except Exception as e:
