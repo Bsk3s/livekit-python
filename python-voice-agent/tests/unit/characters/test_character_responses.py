@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from app.characters.base_character import BaseSpiritualAgent
-from app.services.llm.base import BaseLLMService
+from spiritual_voice_agent.characters.base_character import BaseSpiritualAgent
+from spiritual_voice_agent.services.llm.base import BaseLLMService
 
 class MockLLMService(BaseLLMService):
     """Mock LLM service for testing"""

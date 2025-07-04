@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
-from app.services.llm_service import create_gpt4o_mini
-from app.characters.raffa.personality import RaffaPersonality
+from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
+from spiritual_voice_agent.characters.raffa.personality import RaffaPersonality
 from livekit.agents import llm
 import asyncio
 

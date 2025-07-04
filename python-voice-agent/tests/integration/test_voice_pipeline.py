@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from services.openai_tts_service import OpenAITTSService
+# from services.openai_tts_service import OpenAITTSService  # Service moved to archived
 from dotenv import load_dotenv
 
 load_dotenv()

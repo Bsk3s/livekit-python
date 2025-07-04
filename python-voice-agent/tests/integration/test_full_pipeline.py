@@ -7,12 +7,11 @@ import os
 from dotenv import load_dotenv
 
 # Add app directory to path
-sys.path.append('app')
 
-from services.livekit_deepgram_tts import LiveKitDeepgramTTS
-from services.deepgram_service import create_deepgram_stt
-from services.llm_service import create_gpt4o_mini
-from characters.character_factory import CharacterFactory
+# from services.livekit_deepgram_tts import LiveKitDeepgramTTS  # Service removed
+# from services.deepgram_service import create_deepgram_stt  # Service removed  
+from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
+from spiritual_voice_agent.characters.character_factory import CharacterFactory
 
 load_dotenv()
 

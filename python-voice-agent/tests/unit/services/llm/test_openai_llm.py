@@ -1,7 +1,7 @@
 import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.services.llm.implementations.openai import OpenAILLMService
+from spiritual_voice_agent.services.llm.implementations.openai import OpenAILLMService
 
 @pytest.fixture
 def mock_openai():

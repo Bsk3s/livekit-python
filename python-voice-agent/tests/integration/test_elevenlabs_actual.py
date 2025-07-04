@@ -58,7 +58,7 @@ async def test_elevenlabs_actual():
     print("-" * 30)
     
     try:
-        from app.services.elevenlabs_tts_service import ElevenLabsTTS
+        from spiritual_voice_agent.services.elevenlabs_tts_service import ElevenLabsTTS
         print("✅ ElevenLabs TTS service imported successfully")
         
         # Create the TTS service

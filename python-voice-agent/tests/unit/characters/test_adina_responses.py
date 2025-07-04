@@ -1,7 +1,7 @@
 import os
 import pytest
-from app.characters.adina.agent import AdinaAgent
-from app.services.llm.implementations.openai import OpenAILLMService
+from spiritual_voice_agent.characters.adina.agent import AdinaAgent
+from spiritual_voice_agent.services.llm.implementations.openai import OpenAILLMService
 
 # Override the test environment with real API key
 REAL_API_KEY = "your_openai_api_key_here"

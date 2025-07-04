@@ -1,6 +1,6 @@
 import pytest
 from typing import List, Dict, Optional, AsyncGenerator
-from app.services.llm.base import BaseLLMService
+from spiritual_voice_agent.services.llm.base import BaseLLMService
 
 class MockLLMService(BaseLLMService):
     """Mock implementation of BaseLLMService for testing"""

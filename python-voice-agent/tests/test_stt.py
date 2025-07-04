@@ -4,7 +4,12 @@ import sounddevice as sd
 import numpy as np
 import soundfile as sf
 from dotenv import load_dotenv
-from app.services.deepgram_service import create_deepgram_stt
+# from spiritual_voice_agent.services.deepgram_service import create_deepgram_stt  # Service refactored
+from spiritual_voice_agent.services.stt.implementations.deepgram import DeepgramSTTService
+
+def create_deepgram_stt():
+    """Legacy compatibility function"""
+    return DeepgramSTTService()
 
 async def test_stt_config():
     """Test Deepgram STT configuration and real-time transcription."""

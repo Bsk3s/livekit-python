@@ -9,7 +9,6 @@ import sys
 import os
 
 # Add the app directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'app'))
 
 async def smoke_test():
     """Test that TTS streaming interface works correctly"""
@@ -17,7 +16,7 @@ async def smoke_test():
     
     try:
         # Import the TTS class
-        from app.services.livekit_deepgram_tts import LiveKitDeepgramTTS
+        from spiritual_voice_agent.services.livekit_deepgram_tts import LiveKitDeepgramTTS
         print(f"✅ TTS class imported successfully: {LiveKitDeepgramTTS}")
         print(f"✅ supports_streaming: {getattr(LiveKitDeepgramTTS, 'supports_streaming', 'NOT_SET')}")
         

@@ -13,7 +13,6 @@ import os
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '.'))
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -47,7 +46,7 @@ async def test_elevenlabs_config():
     print("-" * 30)
     
     try:
-        from app.services.elevenlabs_tts_service import ElevenLabsTTS
+        from spiritual_voice_agent.services.elevenlabs_tts_service import ElevenLabsTTS
         print("✅ ElevenLabs TTS service imported successfully")
         
         # Test character configurations

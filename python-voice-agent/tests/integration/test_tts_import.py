@@ -23,7 +23,7 @@ def test_tts_import():
     print("-" * 30)
     
     try:
-        from app.services.elevenlabs_tts_service import ElevenLabsTTS
+        from spiritual_voice_agent.services.elevenlabs_tts_service import ElevenLabsTTS
         print("✅ ElevenLabs TTS service imported successfully")
         print(f"✅ Streaming support: {getattr(ElevenLabsTTS, 'supports_streaming', 'NOT_SET')}")
         print(f"✅ Character configurations: {len(ElevenLabsTTS.VOICE_CONFIGS)} characters")

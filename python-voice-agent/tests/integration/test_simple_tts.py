@@ -9,7 +9,6 @@ import sys
 import os
 
 # Add current directory to path
-sys.path.insert(0, '.')
 
 async def test_openai_tts_direct():
     """Test OpenAI TTS directly"""
@@ -68,7 +67,7 @@ async def test_websocket_tts_service():
     print("🧪 Testing WebSocket TTS service...")
     
     try:
-        from app.services.openai_tts_service import OpenAITTSService
+        from spiritual_voice_agent.services.openai_tts_service import OpenAITTSService
         
         tts_service = OpenAITTSService()
         print("✅ OpenAI TTS service created")

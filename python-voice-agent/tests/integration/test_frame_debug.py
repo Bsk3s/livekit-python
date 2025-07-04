@@ -5,7 +5,6 @@ Debug TTS frame structure to fix audio chunk generation
 
 import asyncio
 import sys
-sys.path.insert(0, '.')
 
 async def debug_frame_structure():
     """Debug the exact structure of TTS frames"""
@@ -13,7 +12,7 @@ async def debug_frame_structure():
     print("=" * 40)
     
     try:
-        from app.services.openai_tts_service import OpenAITTSService
+        from spiritual_voice_agent.services.openai_tts_service import OpenAITTSService
         
         tts_service = OpenAITTSService()
         print("✅ OpenAI TTS service created")
@@ -68,7 +67,7 @@ async def debug_frame_structure():
             print("✅ Audio data extraction: SUCCESS")
             # Test WAV conversion
             try:
-                from app.routes.websocket_audio import pcm_to_wav
+                from spiritual_voice_agent.routes.websocket_audio import pcm_to_wav
                 combined_pcm = b''.join(total_audio_data)
                 wav_data = pcm_to_wav(combined_pcm, sample_rate=24000)  # OpenAI uses 24kHz
                 print(f"✅ WAV conversion: {len(wav_data)} bytes")

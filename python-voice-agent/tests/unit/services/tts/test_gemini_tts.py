@@ -2,9 +2,10 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 import pytest
-from app.services.gemini_tts_service import StreamingGeminiTTS
-from app.characters.adina.voice_config import AdinaVoiceConfig
+# from spiritual_voice_agent.services.gemini_tts_service import StreamingGeminiTTS  # Service moved to archived
+from spiritual_voice_agent.characters.adina.voice_config import AdinaVoiceConfig
 
+@pytest.mark.skip(reason="Gemini TTS service moved to archived folder")
 @pytest.mark.asyncio
 async def test_gemini_tts_streaming_real():
     api_key = os.getenv("GEMINI_API_KEY")

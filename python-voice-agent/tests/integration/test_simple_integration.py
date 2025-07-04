@@ -6,9 +6,8 @@ import os
 from dotenv import load_dotenv
 
 # Add app directory to path
-sys.path.append('app')
 
-from services.livekit_deepgram_tts import LiveKitDeepgramTTS
+# from services.livekit_deepgram_tts import LiveKitDeepgramTTS  # Service removed
 
 load_dotenv()
 
