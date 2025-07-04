@@ -29,13 +29,13 @@ logger = logging.getLogger(__name__)
 
 
 def create_wav_header(
-    sample_rate: int = 16000, num_channels: int = 1, bit_depth: int = 16, data_length: int = 0
+    sample_rate: int = 22050, num_channels: int = 1, bit_depth: int = 16, data_length: int = 0
 ) -> bytes:
-    """Create WAV file header for iOS-compatible audio format"""
+    """Create WAV file header for iOS-compatible audio format (22050 Hz default)"""
     # Calculate derived values
     byte_rate = sample_rate * num_channels * bit_depth // 8
     block_align = num_channels * bit_depth // 8
-    
+
     # Ensure data length is even (required for proper alignment)
     if data_length % 2 != 0:
         data_length += 1
@@ -61,9 +61,9 @@ def create_wav_header(
 
 
 def pcm_to_wav(
-    pcm_data: bytes, sample_rate: int = 16000, num_channels: int = 1, bit_depth: int = 16
+    pcm_data: bytes, sample_rate: int = 22050, num_channels: int = 1, bit_depth: int = 16
 ) -> bytes:
-    """Convert raw PCM data to iOS-compatible WAV format"""
+    """Convert raw PCM data to iOS-compatible WAV format (22050 Hz default)"""
     if not pcm_data:
         return b""
 
@@ -559,7 +559,7 @@ class AudioSession:
                 
                 # State-aware logging and interruption detection
                 if self.conversation_state == "LISTENING":
-                    logger.info(
+                logger.info(
                         f"🗣️ BACKEND HEARD YOU: Speech detected (energy: {audio_energy}, confidence: {confidence:.2f}) - WILL PROCESS"
                     )
                 elif self.conversation_state == "RESPONDING":
@@ -604,28 +604,28 @@ class AudioSession:
 
                 # Get adaptive timeout based on processing mode
                 timeout_seconds = self._get_processing_timeout(processing_mode)
-                
+
                 logger.info(f"📝 Processing audio buffer: {process_reason} (mode: {processing_mode}, timeout: {timeout_seconds}s)")
 
                 # 🛡️ RELIABILITY: Critical operation with adaptive timeout protection
                 try:
-                    # Convert raw PCM to WAV format for Deepgram
-                    wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
+                # Convert raw PCM to WAV format for Deepgram
+                wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
 
-                    # Send transcription start event (check connection first)
-                    if websocket.client_state == WebSocketState.CONNECTED:
-                        await websocket.send_json(
-                            {
-                                "type": "transcription_partial",
-                                "text": "",
-                                "message": "Processing your speech...",
-                                "buffer_size": len(audio_bytes),
-                                "conversation_state": self.conversation_state,
+                # Send transcription start event (check connection first)
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json(
+                        {
+                            "type": "transcription_partial",
+                            "text": "",
+                            "message": "Processing your speech...",
+                            "buffer_size": len(audio_bytes),
+                            "conversation_state": self.conversation_state,
                                 "processing_mode": processing_mode,
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-                    logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+                logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
 
                     # 🛡️ CRITICAL: STT call with adaptive timeout 
                     logger.debug(f"🛡️ Starting STT transcription (mode: {processing_mode}, timeout: {timeout_seconds}s)...")
@@ -635,24 +635,24 @@ class AudioSession:
                     )
                     logger.debug(f"🛡️ STT transcription completed")
 
-                    if transcription and transcription.strip():
-                        # Send complete transcription (check connection first)
-                        if websocket.client_state == WebSocketState.CONNECTED:
-                            await websocket.send_json(
-                                {
-                                    "type": "transcription_complete",
-                                    "text": transcription.strip(),
-                                    "buffer_size": len(audio_bytes),
-                                    "conversation_state": self.conversation_state,
-                                    "timestamp": datetime.now().isoformat(),
-                                }
-                            )
-                        logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
-                        logger.info(f"👤 User ({self.character}): '{transcription}'")
+                if transcription and transcription.strip():
+                    # Send complete transcription (check connection first)
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json(
+                            {
+                                "type": "transcription_complete",
+                                "text": transcription.strip(),
+                                "buffer_size": len(audio_bytes),
+                                "conversation_state": self.conversation_state,
+                                "timestamp": datetime.now().isoformat(),
+                            }
+                        )
+                    logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
+                    logger.info(f"👤 User ({self.character}): '{transcription}'")
 
-                        # Increment conversation turn
-                        self.conversation_turn_count += 1
-                        logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
+                    # Increment conversation turn
+                    self.conversation_turn_count += 1
+                    logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
 
                         # 🛡️ RELIABILITY: Return to safe state BEFORE returning result
                         self._set_state("LISTENING")
@@ -661,22 +661,22 @@ class AudioSession:
                         chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
                         self._track_performance_metric("full_processing_time", chunk_duration_ms)
                         logger.info(f"🔍 Full processing: {chunk_duration_ms:.2f}ms")
-                        
-                        return transcription.strip()
-                    else:
-                        # Send empty transcription result (check connection first)
-                        if websocket.client_state == WebSocketState.CONNECTED:
-                            await websocket.send_json(
-                                {
-                                    "type": "transcription_complete",
-                                    "text": "",
-                                    "message": "No speech detected in audio",
-                                    "buffer_size": len(audio_bytes),
-                                    "conversation_state": self.conversation_state,
-                                    "timestamp": datetime.now().isoformat(),
-                                }
-                            )
-                        logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
+
+                    return transcription.strip()
+                else:
+                    # Send empty transcription result (check connection first)
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json(
+                            {
+                                "type": "transcription_complete",
+                                "text": "",
+                                "message": "No speech detected in audio",
+                                "buffer_size": len(audio_bytes),
+                                "conversation_state": self.conversation_state,
+                                "timestamp": datetime.now().isoformat(),
+                            }
+                        )
+                    logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
 
                         # 🛡️ RELIABILITY: Return to safe state
                         self._set_state("LISTENING")
@@ -1123,7 +1123,7 @@ class AudioSession:
             logger.info(f"🎤 Starting WAV TTS synthesis for: '{text[:50]}...'")
 
             # Use direct OpenAI API for WAV output (most reliable approach)
-            return await self._fallback_tts_synthesis(text)
+                return await self._fallback_tts_synthesis(text)
 
         except Exception as e:
             logger.error(f"❌ WAV TTS synthesis error: {e}")
@@ -1137,7 +1137,7 @@ class AudioSession:
 
 
     async def _fallback_tts_synthesis(self, text: str) -> bytes:
-        """Fallback TTS synthesis using direct OpenAI API (WAV format for iOS compatibility)"""
+        """Fallback TTS synthesis using direct OpenAI API (22050 Hz WAV for iOS compatibility)"""
         try:
             logger.info(f"🔄 Trying fallback TTS for: '{text[:30]}...'")
 
@@ -1148,10 +1148,8 @@ class AudioSession:
                 model="tts-1",
                 voice="nova" if self.character == "adina" else "onyx",
                 input=text,
-                response_format="wav",  # Changed from mp3 to wav for iOS compatibility
+                response_format="wav",  # WAV format for iOS compatibility
                 speed=1.0,  # Normal speed
-                # Note: OpenAI TTS doesn't support sample rate specification in the API
-                # We'll need to handle this differently
             )
 
             audio_data = await response.aread()
@@ -1174,7 +1172,7 @@ class AudioSession:
             
             logger.info(f"🔍 FORMAT DETECTION: WAV={is_wav}, MP3={is_mp3}, AAC={is_aac}")
             
-            # If it's WAV, check the header details
+            # If it's WAV, check the header details and convert to 22050 Hz if needed
             if is_wav and len(audio_data) >= 44:
                 try:
                     import struct
@@ -1184,17 +1182,9 @@ class AudioSession:
                     
                     logger.info(f"🔍 WAV HEADER: Sample Rate={sample_rate}, Channels={channels}, Bits={bits_per_sample}, Format={audio_format}")
                     
-                    # Check if it's iOS compatible
-                    ios_compatible = (sample_rate in [8000, 16000, 22050, 44100, 48000] and 
-                                    channels in [1, 2] and 
-                                    bits_per_sample in [8, 16, 24, 32] and
-                                    audio_format == 1)  # PCM
-                    
-                    logger.info(f"🔍 iOS COMPATIBILITY: {ios_compatible}")
-                    
-                    # 🎯 FIX: If not iOS compatible, convert to iOS-compatible format
-                    if not ios_compatible and sample_rate == 24000:
-                        logger.info(f"🔄 Converting 24kHz WAV to iOS-compatible 22.05kHz")
+                    # 🎯 DIRECT 22050 Hz CONVERSION: Convert any sample rate to 22050 Hz for iOS compatibility
+                    if sample_rate != 22050:
+                        logger.info(f"🔄 Converting {sample_rate}Hz WAV to iOS-compatible 22050Hz")
                         try:
                             import wave
                             import io
@@ -1213,7 +1203,7 @@ class AudioSession:
                                     # Convert to numpy array
                                     audio_array = np.frombuffer(frames, dtype=np.int16)
                                     
-                                    # Resample from 24kHz to 22.05kHz
+                                    # Resample to 22050 Hz (iOS compatible)
                                     target_sample_rate = 22050
                                     resampled_audio = signal.resample(audio_array, 
                                                                      int(len(audio_array) * target_sample_rate / original_sample_rate))
@@ -1230,11 +1220,13 @@ class AudioSession:
                                             wav_out.writeframes(resampled_audio.tobytes())
                                         
                                         audio_data = new_wav_io.getvalue()
-                                        logger.info(f"✅ Successfully converted to iOS-compatible 22.05kHz WAV: {len(audio_data)} bytes")
+                                        logger.info(f"✅ Successfully converted to iOS-compatible 22050Hz WAV: {len(audio_data)} bytes")
                                         
                         except Exception as conversion_error:
                             logger.error(f"❌ WAV conversion failed: {conversion_error}")
                             # Fall back to original audio
+                    else:
+                        logger.info(f"✅ WAV already at 22050Hz - iOS compatible")
                     
                 except Exception as e:
                     logger.error(f"🔍 WAV HEADER PARSE ERROR: {e}")
@@ -1449,7 +1441,7 @@ class AudioSession:
                     
                     await websocket.send_json({
                         "type": "audio_stream",
-                        "character": self.character,
+                            "character": self.character,
                         "audio_data": audio_base64,
                         "audio_size_bytes": len(concatenated_audio),
                         "audio_size_base64": len(audio_base64),
@@ -1457,7 +1449,7 @@ class AudioSession:
                         "is_concatenated": True,
                         "conversation_state": self.conversation_state,
                         "conversation_turn": self.conversation_turn_count,
-                        "timestamp": datetime.now().isoformat(),
+                            "timestamp": datetime.now().isoformat(),
                     })
                     
                     logger.info(f"🎵 Sent concatenated audio stream: {len(concatenated_audio)} bytes, {len(audio_base64)} base64 chars")
@@ -1750,7 +1742,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
 
                 elif "bytes" in data:
                     # Handle binary audio data - ALWAYS process for VAD and interruption detection
-                    audio_data = data["bytes"]
+                        audio_data = data["bytes"]
                     
                     # 🔍 VALIDATION: Check if receiving PCM vs WAV
                     first_bytes = audio_data[:100] if len(audio_data) >= 100 else audio_data
