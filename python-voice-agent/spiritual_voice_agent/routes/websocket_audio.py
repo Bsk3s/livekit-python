@@ -977,62 +977,22 @@ class AudioSession:
             return f"I apologize, I'm having a technical difficulty. Could you please try again?"
 
     async def synthesize_speech_chunk(self, text: str) -> bytes:
-        """Convert text chunk to speech in WAV format"""
+        """Convert text chunk to speech in MP3 format"""
         try:
-            logger.info(f"🎤 Starting TTS synthesis for: '{text[:50]}...'")
+            logger.info(f"🎤 Starting MP3 TTS synthesis for: '{text[:50]}...'")
 
-            # Use TTS service to generate audio
-            audio_frames = []
-            frame_count = 0
-            sample_rate = 48000  # Default OpenAI TTS sample rate
-
-            async for synth_audio in self.tts_service.synthesize_streaming(text, self.character):
-                frame_count += 1
-                logger.debug(f"🎵 Received TTS frame {frame_count}: {type(synth_audio)}")
-
-                # Extract audio frame
-                audio_frame = synth_audio.frame
-                sample_rate = audio_frame.sample_rate  # Get actual sample rate
-
-                # Extract audio data properly
-                if hasattr(audio_frame, "data"):
-                    audio_data = audio_frame.data.tobytes()
-                    audio_frames.append(audio_data)
-                    logger.debug(f"🎵 Added frame data: {len(audio_data)} bytes at {sample_rate}Hz")
-                else:
-                    logger.warning(f"⚠️ Audio frame has no data attribute: {type(audio_frame)}")
-
-            logger.info(
-                f"🎵 TTS completed: {frame_count} frames, {len(audio_frames)} audio chunks at {sample_rate}Hz"
-            )
-
-            # Combine all audio frames
-            if audio_frames:
-                combined_pcm = b"".join(audio_frames)
-                logger.info(f"🎵 Combined PCM: {len(combined_pcm)} bytes")
-
-                # Convert PCM to WAV format with correct sample rate
-                wav_data = pcm_to_wav(
-                    combined_pcm, sample_rate=sample_rate, num_channels=1, bit_depth=16
-                )
-                logger.info(f"🎵 Generated {len(wav_data)} bytes WAV for: '{text[:30]}...'")
-                return wav_data
-            else:
-                logger.warning(f"⚠️ No audio frames generated for text: {text[:50]}...")
-                logger.warning(f"⚠️ Frame count was: {frame_count}")
-
-                # Try fallback approach - direct OpenAI API
-                return await self._fallback_tts_synthesis(text)
+            # Use direct OpenAI API for MP3 output (more reliable than LiveKit plugin)
+            return await self._fallback_tts_synthesis(text)
 
         except Exception as e:
-            logger.error(f"❌ Speech synthesis error: {e}")
+            logger.error(f"❌ MP3 TTS synthesis error: {e}")
             logger.error(f"❌ Error type: {type(e)}")
             import traceback
 
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
-            # Try fallback approach
-            return await self._fallback_tts_synthesis(text)
+            # Return empty bytes as fallback
+            return b""
 
     async def _fallback_tts_synthesis(self, text: str) -> bytes:
         """Fallback TTS synthesis using direct OpenAI API"""
@@ -1046,7 +1006,7 @@ class AudioSession:
                 model="tts-1",
                 voice="nova" if self.character == "adina" else "onyx",
                 input=text,
-                response_format="wav",
+                response_format="mp3",
             )
 
             audio_data = await response.aread()
@@ -1242,20 +1202,20 @@ class AudioSession:
                     if wav_audio and websocket.client_state == WebSocketState.CONNECTED:
                         chunk_duration = (time.time() - chunk_start_time) * 1000
 
-                        # 🔍 VALIDATION: Check WAV output format
-                        base64_audio = base64.b64encode(wav_audio).decode("utf-8")
+                        # 🔍 VALIDATION: Check MP3 output format
+                        base64_audio = base64.b64encode(mp3_audio).decode("utf-8")
                         base64_length = len(base64_audio)
-                        
-                        # Decode and check WAV header
+
+                        # Decode and check MP3 header
                         try:
-                            decoded_wav = base64.b64decode(base64_audio)
-                            is_valid_wav = len(decoded_wav) >= 44 and decoded_wav[:4] == b'RIFF' and decoded_wav[8:12] == b'WAVE'
-                            wav_size = len(decoded_wav)
-                            logger.info(f"🔍 VALIDATION: WAV output - Size: {wav_size} bytes, Base64: {base64_length} chars, Valid WAV: {is_valid_wav}")
+                            decoded_mp3 = base64.b64decode(base64_audio)
+                            is_valid_mp3 = len(decoded_mp3) >= 3 and decoded_mp3[:3] == b'ID3' or (decoded_mp3[0] == 0xFF and (decoded_mp3[1] & 0xE0) == 0xE0)
+                            mp3_size = len(decoded_mp3)
+                            logger.info(f"🔍 VALIDATION: MP3 output - Size: {mp3_size} bytes, Base64: {base64_length} chars, Valid MP3: {is_valid_mp3}")
                         except Exception as e:
-                            logger.error(f"🔍 VALIDATION: WAV decode error: {e}")
-                            is_valid_wav = False
-                        
+                            logger.error(f"🔍 VALIDATION: MP3 decode error: {e}")
+                            is_valid_mp3 = False
+
                         # Send audio chunk immediately
                         await websocket.send_json(
                             {
@@ -1277,7 +1237,7 @@ class AudioSession:
                         logger.info(
                             f"🎵 Sent chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars, {chunk_duration:.0f}ms)"
                         )
-                    elif not wav_audio:
+                    elif not mp3_audio:
                         logger.error(
                             f"❌ Failed to generate audio for chunk {i+1}: '{chunk_text[:30]}...'"
                         )
