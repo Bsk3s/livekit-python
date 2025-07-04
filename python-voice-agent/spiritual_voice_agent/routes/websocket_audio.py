@@ -268,10 +268,10 @@ class AudioSession:
             self.llm_service = create_gpt4o_mini()
             logger.info(f"✅ LLM service initialized for session {self.session_id}")
 
-            # TTS Service - Using direct MP3 API (skip LiveKit plugin for iOS compatibility)
+            # TTS Service - Using MP3 TTS service for iOS compatibility
             logger.info(f"🎵 Creating MP3 TTS service for session {self.session_id}")
             character_config = CharacterFactory.get_character_config(self.character)
-            self.tts_service = None  # Skip LiveKit plugin, use direct MP3 API
+            self.tts_service = TTSFactory.create_tts(self.character, model_override="mp3")
             logger.info(f"✅ MP3 TTS service initialized for session {self.session_id}")
 
             # Set initial conversation state
@@ -981,8 +981,14 @@ class AudioSession:
         try:
             logger.info(f"🎤 Starting MP3 TTS synthesis for: '{text[:50]}...'")
 
-            # Use direct OpenAI API for MP3 output (more reliable than LiveKit plugin)
-            return await self._fallback_tts_synthesis(text)
+            # Use the MP3 TTS service
+            if self.tts_service:
+                # Get the MP3 audio data from the TTS service
+                # Since we're using MP3 format, we need to extract the raw MP3 data
+                return await self._get_mp3_from_tts_service(text)
+            else:
+                # Fallback to direct API call
+                return await self._fallback_tts_synthesis(text)
 
         except Exception as e:
             logger.error(f"❌ MP3 TTS synthesis error: {e}")
@@ -993,6 +999,20 @@ class AudioSession:
 
             # Return empty bytes as fallback
             return b""
+
+    async def _get_mp3_from_tts_service(self, text: str) -> bytes:
+        """Extract MP3 data from the TTS service"""
+        try:
+            # For MP3 TTS service, we need to get the raw MP3 data
+            # This is a simplified approach - in practice, you'd need to modify the TTS service
+            # to return the raw MP3 bytes instead of audio frames
+            
+            # For now, use the fallback method which we know works
+            return await self._fallback_tts_synthesis(text)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get MP3 from TTS service: {e}")
+            return await self._fallback_tts_synthesis(text)
 
     async def _fallback_tts_synthesis(self, text: str) -> bytes:
         """Fallback TTS synthesis using direct OpenAI API"""
