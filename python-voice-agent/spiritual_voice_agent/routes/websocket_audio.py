@@ -1202,7 +1202,7 @@ class AudioSession:
                     # 🛡️ CRITICAL: TTS call with aggressive timeout protection
                     try:
                         logger.debug(f"🛡️ Starting TTS for chunk {i+1}...")
-                        wav_audio = await asyncio.wait_for(
+                        mp3_audio = await asyncio.wait_for(
                             self.synthesize_speech_chunk(chunk_text),
                             timeout=8.0  # Increased to 8s per chunk for more reliable streaming
                         )
@@ -1219,7 +1219,7 @@ class AudioSession:
                         logger.info(f"🎯 ✂️ TTS streaming cancelled before sending chunk {i+1}")
                         break
 
-                    if wav_audio and websocket.client_state == WebSocketState.CONNECTED:
+                    if mp3_audio and websocket.client_state == WebSocketState.CONNECTED:
                         chunk_duration = (time.time() - chunk_start_time) * 1000
 
                         # 🔍 VALIDATION: Check MP3 output format
