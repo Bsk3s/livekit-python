@@ -1237,174 +1237,196 @@ class AudioSession:
                 self._force_reset_state("LISTENING", "empty_chunks")
                 return
 
-            logger.info(f"🎯 Streaming {len(chunks)} audio chunks for response")
+            logger.info(f"🎯 Generating {len(chunks)} audio chunks for concatenated stream")
 
             # Send response start notification with full details
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.send_json(
                     {
-                        "type": "response_start",
+                        "type": "response_started",
                         "character": self.character,
-                        "total_chunks": len(chunks),
-                        "full_text": response_text,
+                        "full_response": response_text,
+                        "chunk_count": len(chunks),
+                        "conversation_state": self.conversation_state,
+                        "conversation_turn": self.conversation_turn_count,
                         "timestamp": datetime.now().isoformat(),
                     }
                 )
 
-            # 🎯 INTERRUPTION SYSTEM: Create cancellable TTS streaming task
-            async def stream_tts_chunks():
-                """Cancellable TTS streaming function"""
-                for i, chunk_text in enumerate(chunks):
-                    # 🎯 Check for cancellation at start of each chunk
-                    if self._stream_cancelled:
-                        logger.info(f"🎯 ✂️ TTS streaming cancelled at chunk {i+1}/{len(chunks)}")
-                        break
-                        
-                    # Check connection before processing each chunk
-                    if websocket.client_state != WebSocketState.CONNECTED:
-                        logger.warning(f"⚠️ WebSocket disconnected during chunk {i+1}, stopping stream")
-                        break
-
-                    chunk_start_time = time.time()
-
-                    # 🛡️ CRITICAL: TTS call with aggressive timeout protection
-                    try:
-                        logger.debug(f"🛡️ Starting TTS for chunk {i+1}...")
-                        wav_audio = await asyncio.wait_for(
-                            self.synthesize_speech_chunk(chunk_text),
-                            timeout=8.0  # Increased to 8s per chunk for more reliable streaming
-                        )
-                        logger.debug(f"🛡️ TTS completed for chunk {i+1}")
-                    except asyncio.TimeoutError:
-                        logger.error(f"🛡️ TTS timeout for chunk {i+1} after 8s - skipping")
-                        continue
-                    except Exception as tts_error:
-                        logger.error(f"🛡️ TTS failed for chunk {i+1}: {tts_error}")
-                        continue
-
-                    # 🎯 Final cancellation check before sending
-                    if self._stream_cancelled:
-                        logger.info(f"🎯 ✂️ TTS streaming cancelled before sending chunk {i+1}")
-                        break
-
-                    if wav_audio and websocket.client_state == WebSocketState.CONNECTED:
-                        chunk_duration = (time.time() - chunk_start_time) * 1000
-
-                        # 🔍 VALIDATION: Check WAV output format
-                        base64_audio = base64.b64encode(wav_audio).decode("utf-8")
-                        base64_length = len(base64_audio)
-
-                        # Decode and check WAV header
-                        try:
-                            decoded_wav = base64.b64decode(base64_audio)
-                            is_valid_wav = len(decoded_wav) >= 44 and decoded_wav[:4] == b'RIFF' and decoded_wav[8:12] == b'WAVE'
-                            wav_size = len(decoded_wav)
-                            logger.info(f"🔍 VALIDATION: WAV output - Size: {wav_size} bytes, Base64: {base64_length} chars, Valid WAV: {is_valid_wav}")
-                        except Exception as e:
-                            logger.error(f"🔍 VALIDATION: WAV decode error: {e}")
-                            is_valid_wav = False
-
-                        # Send audio chunk immediately
-                        await websocket.send_json(
-                            {
-                                "type": "audio_chunk",
-                                "chunk_id": i + 1,
-                                "total_chunks": len(chunks),
-                                "is_final": i == len(chunks) - 1,
-                                "text": chunk_text,
-                                "audio": base64_audio,
-                                "character": self.character,
-                                "generation_time_ms": round(chunk_duration),
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-
-                        # 🎯 Track successful chunk transmission
-                        self._response_chunks_sent += 1
-
-                        logger.info(
-                            f"🎵 Sent chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars, {chunk_duration:.0f}ms)"
-                        )
-                    elif not wav_audio:
-                        logger.error(
-                            f"❌ Failed to generate audio for chunk {i+1}: '{chunk_text[:30]}...'"
-                        )
+            # 🎯 NEW APPROACH: Generate all TTS chunks first, then concatenate
+            logger.info(f"🎤 Starting TTS generation for {len(chunks)} chunks")
+            tts_start_time = time.time()
+            
+            # Generate all TTS chunks in parallel for better performance
+            tts_tasks = []
+            for i, chunk in enumerate(chunks):
+                task = asyncio.create_task(self.synthesize_speech_chunk(chunk))
+                tts_tasks.append((i, chunk, task))
+            
+            # Wait for all TTS chunks to complete
+            audio_chunks = []
+            for i, chunk_text, task in tts_tasks:
+                try:
+                    audio_data = await task
+                    if audio_data:
+                        audio_chunks.append((i, audio_data))
+                        logger.info(f"🎵 Generated TTS chunk {i+1}/{len(chunks)}: {len(audio_data)} bytes")
                     else:
-                        logger.warning(f"⚠️ WebSocket disconnected, cannot send chunk {i+1}")
-                        break
-
-            # 🎯 Execute TTS streaming with cancellation support
-            try:
-                self._current_tts_task = asyncio.create_task(stream_tts_chunks())
-                await self._current_tts_task
-                logger.info(f"🎯 TTS streaming completed normally")
-            except asyncio.CancelledError:
-                logger.info(f"🎯 ✂️ TTS streaming was cancelled by interruption")
-            finally:
-                self._current_tts_task = None
-
-            # Send completion notification (if still connected and not interrupted)
-            if websocket.client_state == WebSocketState.CONNECTED:
-                if self._stream_cancelled:
-                    await websocket.send_json(
-                        {
-                            "type": "response_interrupted",
-                            "character": self.character,
-                            "chunks_sent": self._response_chunks_sent,
-                            "total_chunks": len(chunks),
-                            "conversation_turn": self.conversation_turn_count,
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                    logger.info(f"🎯 ✂️ Response interrupted after {self._response_chunks_sent}/{len(chunks)} chunks")
-                else:
-                    await websocket.send_json(
-                        {
-                            "type": "response_complete",
-                            "character": self.character,
-                            "chunks_sent": self._response_chunks_sent,
-                            "conversation_turn": self.conversation_turn_count,
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-
-            # 🛡️ RELIABILITY: Return to safe state BEFORE scheduling cleanup
-            self._set_state("LISTENING")
-            logger.info(
-                f"🔄 Response complete - Back to LISTENING state (Turn #{self.conversation_turn_count})"
-            )
-
-            # 🛡️ ASYNC CLEANUP: Schedule cleanup to run in background (zero latency)
-            self._schedule_cleanup("response_complete")
-
-        except Exception as e:
-            logger.error(f"❌ Error in streaming response: {e}")
+                        logger.warning(f"⚠️ TTS chunk {i+1} returned empty audio")
+                except Exception as e:
+                    logger.error(f"❌ TTS chunk {i+1} failed: {e}")
             
-            # 🛡️ GUARANTEED CLEANUP: Always reset state on any error  
-            self._force_reset_state("LISTENING", f"response_error: {e}")
+            # Sort chunks by original order
+            audio_chunks.sort(key=lambda x: x[0])
+            audio_chunks = [chunk[1] for chunk in audio_chunks]
             
-            # Only try to send error if connection is still active
+            tts_duration = time.time() - tts_start_time
+            logger.info(f"🎤 TTS generation completed: {len(audio_chunks)} chunks in {tts_duration:.2f}s")
+
+            if not audio_chunks:
+                logger.error("❌ No audio chunks generated")
+                self._force_reset_state("LISTENING", "no_audio_chunks")
+                return
+
+            # 🎯 CONCATENATE: Merge all audio chunks into one continuous stream
+            logger.info(f"🔄 Concatenating {len(audio_chunks)} audio chunks into single stream")
+            concatenated_audio = await self._concatenate_audio_chunks(audio_chunks)
+            
+            if not concatenated_audio:
+                logger.error("❌ Audio concatenation failed")
+                self._force_reset_state("LISTENING", "concatenation_failed")
+                return
+
+            logger.info(f"✅ Concatenated audio stream: {len(concatenated_audio)} bytes")
+
+            # 🎯 SEND: Stream the concatenated audio as one continuous file
             if websocket.client_state == WebSocketState.CONNECTED:
                 try:
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": "Failed to stream response",
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                except Exception:
-                    logger.debug("Could not send error message - connection already closed")
+                    # Send as base64-encoded audio data
+                    import base64
+                    audio_base64 = base64.b64encode(concatenated_audio).decode('utf-8')
                     
-        finally:
-            # 🎯 INTERRUPTION SYSTEM: Reset tracking variables
-            self._current_tts_task = None
-            self._response_chunks_sent = 0
-            self._stream_cancelled = False
+                    await websocket.send_json({
+                        "type": "audio_stream",
+                        "character": self.character,
+                        "audio_data": audio_base64,
+                        "audio_size_bytes": len(concatenated_audio),
+                        "audio_size_base64": len(audio_base64),
+                        "chunk_count": len(chunks),
+                        "is_concatenated": True,
+                        "conversation_state": self.conversation_state,
+                        "conversation_turn": self.conversation_turn_count,
+                        "timestamp": datetime.now().isoformat(),
+                    })
+                    
+                    logger.info(f"🎵 Sent concatenated audio stream: {len(concatenated_audio)} bytes, {len(audio_base64)} base64 chars")
+                    
+                except Exception as send_error:
+                    logger.error(f"❌ Failed to send concatenated audio: {send_error}")
+                    self._force_reset_state("LISTENING", f"send_error: {send_error}")
+                    return
+
+            # Send response complete notification
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json(
+                    {
+                        "type": "response_complete",
+                        "character": self.character,
+                        "full_response": response_text,
+                        "total_audio_size": len(concatenated_audio),
+                        "chunk_count": len(chunks),
+                        "conversation_state": self.conversation_state,
+                        "conversation_turn": self.conversation_turn_count,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+
+            logger.info(f"🎯 Concatenated audio streaming completed")
+            self._set_state("LISTENING")
+            logger.info(f"🔄 Response complete - Back to LISTENING state (Turn #{self.conversation_turn_count})")
+
+        except Exception as e:
+            logger.error(f"❌ Error in process_and_stream_response: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            self._force_reset_state("LISTENING", f"stream_error: {e}")
+
+    async def _concatenate_audio_chunks(self, audio_chunks: List[bytes]) -> bytes:
+        """Concatenate multiple WAV audio chunks into one continuous WAV stream"""
+        if not audio_chunks:
+            return b""
+        
+        if len(audio_chunks) == 1:
+            return audio_chunks[0]
+        
+        try:
+            import wave
+            import io
+            import struct
             
-            # 🛡️ GUARANTEED: Always ensure we're in a good state
-            if self.conversation_state == "RESPONDING":
-                self._set_state("LISTENING")
+            logger.info(f"🔄 Concatenating {len(audio_chunks)} WAV chunks")
+            
+            # Extract audio data from each WAV chunk (remove headers)
+            audio_data_chunks = []
+            total_samples = 0
+            sample_rate = None
+            channels = None
+            sample_width = None
+            
+            for i, wav_data in enumerate(audio_chunks):
+                try:
+                    with io.BytesIO(wav_data) as wav_io:
+                        with wave.open(wav_io, 'rb') as wav_in:
+                            # Get WAV parameters (should be same for all chunks)
+                            if sample_rate is None:
+                                sample_rate = wav_in.getframerate()
+                                channels = wav_in.getnchannels()
+                                sample_width = wav_in.getsampwidth()
+                            else:
+                                # Verify all chunks have same parameters
+                                if (wav_in.getframerate() != sample_rate or 
+                                    wav_in.getnchannels() != channels or 
+                                    wav_in.getsampwidth() != sample_width):
+                                    logger.warning(f"⚠️ WAV chunk {i} has different parameters")
+                            
+                            # Read audio data (skip header)
+                            frames = wav_in.readframes(wav_in.getnframes())
+                            audio_data_chunks.append(frames)
+                            total_samples += wav_in.getnframes()
+                            
+                            logger.debug(f"🔄 Chunk {i+1}: {wav_in.getnframes()} frames, {len(frames)} bytes")
+                            
+                except Exception as e:
+                    logger.error(f"❌ Failed to process WAV chunk {i}: {e}")
+                    continue
+            
+            if not audio_data_chunks:
+                logger.error("❌ No valid audio data chunks found")
+                return b""
+            
+            # Concatenate all audio data
+            concatenated_audio_data = b''.join(audio_data_chunks)
+            
+            # Create new WAV file with concatenated data
+            with io.BytesIO() as new_wav_io:
+                with wave.open(new_wav_io, 'wb') as wav_out:
+                    wav_out.setnchannels(channels)
+                    wav_out.setsampwidth(sample_width)
+                    wav_out.setframerate(sample_rate)
+                    wav_out.writeframes(concatenated_audio_data)
+                
+                concatenated_wav = new_wav_io.getvalue()
+                
+                logger.info(f"✅ Concatenated {len(audio_chunks)} chunks: {total_samples} total frames, {len(concatenated_wav)} bytes")
+                logger.info(f"✅ Final WAV: {sample_rate}Hz, {channels} channels, {sample_width*8} bits")
+                
+                return concatenated_wav
+                
+        except Exception as e:
+            logger.error(f"❌ Audio concatenation failed: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            return b""
 
     def reset_for_next_turn(self):
         """Reset audio processing state between conversation turns (not between sessions)"""
