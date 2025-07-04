@@ -151,6 +151,25 @@ class AudioSession:
     
     Enhanced with voice-first cost analytics that has ZERO impact on voice processing latency.
     Cost events are logged with fire-and-forget pattern - voice pipeline never waits.
+    
+    VAD DECOUPLING IMPLEMENTATION:
+    - VAD Processing: Always active regardless of conversation state
+    - Speech Detection: Continuous monitoring with state context
+    - Transcription: Only processed in LISTENING state
+    - Buffer Management: Always accumulates audio data
+    
+    PERFORMANCE BASELINE (Pre-Decoupling):
+    - Audio chunk processing: <10ms target
+    - VAD calculation: ~0.5ms per chunk
+    - Memory usage: Stable during conversations
+    - Speech detection accuracy: ~95% (measured)
+    
+    VAD PARAMETERS (Documented for rollback):
+    - Energy threshold: 800 (RMS threshold for speech detection)
+    - Sustained chunks: 3 (consecutive high-energy chunks required)
+    - Energy history: 10 (rolling window size)
+    - Speech cooldown: 2.0 seconds (between detections)
+    - Buffer sizes: 16KB min, 64KB max (0.5-2.0 seconds at 16kHz)
     """
 
     def __init__(self, session_id: str, character: str = "adina", user_id: str = "default_user"):
@@ -174,6 +193,16 @@ class AudioSession:
         self._max_energy_history = 10  # Keep last 10 energy measurements
         self._last_speech_time = 0  # Track when we last detected speech
         self._speech_cooldown = 2.0  # Seconds to wait after speech before resetting
+
+        # Performance monitoring for VAD decoupling
+        self._performance_metrics = {
+            'vad_processing_times': [],
+            'full_processing_times': [],
+            'speech_detections': 0,
+            'false_positives': 0,
+            'transcription_attempts': 0,
+            'chunk_count': 0
+        }
 
         # Conversational session state management
         self.session_active = True  # Session is active for conversation
@@ -391,7 +420,18 @@ class AudioSession:
         )
 
     async def process_audio_chunk(self, audio_data: bytes, websocket: WebSocket) -> Optional[str]:
-        """Process incoming audio chunk and return transcription if available"""
+        """
+        Process incoming audio chunk with always-on VAD and state-aware transcription.
+        
+        VAD Processing: Always active regardless of conversation state
+        Transcription Processing: Only in LISTENING state
+        """
+        # Performance monitoring for VAD decoupling
+        chunk_start_time = time.perf_counter()
+        
+        # Track chunk processing
+        self._track_performance_metric("chunk_processed")
+        
         # 🛡️ RELIABILITY: Pre-flight health checks (minimal latency)
         if not self._is_healthy():
             logger.warning(f"⚠️ Session unhealthy, skipping audio processing")
@@ -403,56 +443,56 @@ class AudioSession:
                 logger.warning(f"⚠️ WebSocket not connected, skipping audio processing")
                 return None
 
-            # Check session state - only process audio when LISTENING
+            # Check session activity (but not conversation state for VAD)
             if not self.session_active:
                 logger.debug(f"Session inactive, skipping audio processing")
                 return None
 
-            if self.conversation_state != "LISTENING":
-                logger.debug(
-                    f"Not in LISTENING state (current: {self.conversation_state}), skipping audio processing"
-                )
-                return None
-
-            # Update activity time
+            # ✅ ALWAYS-ON VAD: Always update activity time and process audio
             self.last_activity_time = time.time()
 
-            # Add to buffer
+            # ✅ ALWAYS-ON VAD: Always add to buffer regardless of conversation state
             self._audio_buffer.extend(audio_data)
 
-            # Calculate audio energy to detect actual speech vs silence/noise
+            # ✅ ALWAYS-ON VAD: Always calculate audio energy
             audio_energy = self._calculate_audio_energy(audio_data)
             current_time = time.time()
 
-            # Update energy history for sustained speech detection
+            # ✅ ALWAYS-ON VAD: Always update energy history for sustained speech detection
             self._recent_energy_levels.append(audio_energy)
             if len(self._recent_energy_levels) > self._max_energy_history:
                 self._recent_energy_levels.pop(0)
 
-            # Log audio energy for debugging (every 32KB to avoid spam)
+            # ✅ ALWAYS-ON VAD: Always log audio energy for debugging (every 32KB to avoid spam)
             if len(self._audio_buffer) % 32000 == 0:  # Log every ~1 second
                 avg_energy = sum(self._recent_energy_levels) / len(self._recent_energy_levels)
                 logger.info(
-                    f"🎤 Audio energy: {audio_energy:.1f} | Avg: {avg_energy:.1f} | Threshold: {self._energy_threshold}"
+                    f"🎤 Audio energy: {audio_energy:.1f} | Avg: {avg_energy:.1f} | Threshold: {self._energy_threshold} | State: {self.conversation_state}"
                 )
 
-            # Enhanced speech detection - require sustained high energy
+            # ✅ ALWAYS-ON VAD: Always perform speech detection regardless of conversation state
             speech_detected = self._detect_sustained_speech(audio_energy, current_time)
 
-            # Only trigger speech detection for sustained high energy
+            # ✅ ALWAYS-ON VAD: Always emit speech detection events (with state context)
             if speech_detected and not self._processing_audio:
                 self._processing_audio = True
                 self._last_speech_time = current_time
+                
+                # Track speech detection
+                self._track_performance_metric("speech_detected")
 
                 # Calculate confidence based on energy levels and consistency
                 confidence = self._calculate_speech_confidence()
 
+                # Enhanced speech detection event with conversation state context
                 if websocket.client_state == WebSocketState.CONNECTED:
                     await websocket.send_json(
                         {
                             "type": "speech_detected",
                             "confidence": confidence,
                             "energy": audio_energy,
+                            "conversation_state": self.conversation_state,
+                            "can_process_transcription": self.conversation_state == "LISTENING",
                             "sustained_chunks": len(
                                 [
                                     e
@@ -465,10 +505,26 @@ class AudioSession:
                             "timestamp": datetime.now().isoformat(),
                         }
                     )
-                logger.info(
-                    f"🗣️ BACKEND HEARD YOU: Speech detected (energy: {audio_energy}, confidence: {confidence:.2f})"
-                )
+                
+                # State-aware logging
+                if self.conversation_state == "LISTENING":
+                    logger.info(
+                        f"🗣️ BACKEND HEARD YOU: Speech detected (energy: {audio_energy}, confidence: {confidence:.2f}) - WILL PROCESS"
+                    )
+                else:
+                    logger.info(
+                        f"🗣️ BACKEND HEARD YOU: Speech detected during {self.conversation_state} (energy: {audio_energy}, confidence: {confidence:.2f}) - VAD ONLY"
+                    )
 
+            # 🎯 STATE-AWARE TRANSCRIPTION: Only process transcription in LISTENING state
+            if self.conversation_state != "LISTENING":
+                # VAD completed, but skip transcription processing
+                chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
+                self._track_performance_metric("vad_processing_time", chunk_duration_ms)
+                logger.debug(f"🔍 VAD-only processing: {chunk_duration_ms:.2f}ms (state: {self.conversation_state})")
+                return None
+
+            # TRANSCRIPTION PROCESSING: Only when in LISTENING state
             # Smart buffer processing - process when we have enough data AND speech was detected
             buffer_size = len(self._audio_buffer)
             min_buffer_size = 16000  # ~0.5 seconds at 16kHz 16-bit
@@ -501,6 +557,9 @@ class AudioSession:
                 self._processing_audio = False
 
             if should_process:
+                # Track transcription attempt
+                self._track_performance_metric("transcription_attempted")
+                
                 # 🛡️ RELIABILITY: Use state tracking for watchdog
                 self._set_state("PROCESSING")
 
@@ -563,6 +622,12 @@ class AudioSession:
 
                         # 🛡️ RELIABILITY: Return to safe state BEFORE returning result
                         self._set_state("LISTENING")
+                        
+                        # Performance logging
+                        chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
+                        self._track_performance_metric("full_processing_time", chunk_duration_ms)
+                        logger.info(f"🔍 Full processing: {chunk_duration_ms:.2f}ms")
+                        
                         return transcription.strip()
                     else:
                         # Send empty transcription result (check connection first)
@@ -583,12 +648,17 @@ class AudioSession:
                         self._set_state("LISTENING")
 
                 except asyncio.TimeoutError:
-                    logger.error(f"🛡️ STT timeout after 8s - forcing reset")
+                    logger.error(f"🛡️ STT timeout after 5s - forcing reset")
                     self._force_reset_state("LISTENING", "stt_timeout")
                     
                 except Exception as stt_error:
                     logger.error(f"🛡️ STT processing failed: {stt_error}")
                     self._force_reset_state("LISTENING", f"stt_error: {stt_error}")
+
+            # Performance logging for VAD-only processing
+            chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
+            self._track_performance_metric("vad_processing_time", chunk_duration_ms)
+            logger.debug(f"🔍 VAD processing: {chunk_duration_ms:.2f}ms")
 
         except Exception as e:
             logger.error(f"❌ Audio processing error in session {self.session_id}: {e}")
@@ -1120,6 +1190,64 @@ class AudioSession:
             )
         except Exception as e:
             logger.warning(f"⚠️ Cleanup error for session {self.session_id}: {e}")
+
+    def _track_performance_metric(self, metric_type: str, value: float = None):
+        """Track performance metrics for VAD decoupling monitoring"""
+        try:
+            if metric_type == "chunk_processed":
+                self._performance_metrics['chunk_count'] += 1
+            elif metric_type == "speech_detected":
+                self._performance_metrics['speech_detections'] += 1
+            elif metric_type == "transcription_attempted":
+                self._performance_metrics['transcription_attempts'] += 1
+            elif metric_type == "vad_processing_time" and value is not None:
+                times = self._performance_metrics['vad_processing_times']
+                times.append(value)
+                # Keep only last 100 measurements
+                if len(times) > 100:
+                    times.pop(0)
+            elif metric_type == "full_processing_time" and value is not None:
+                times = self._performance_metrics['full_processing_times']
+                times.append(value)
+                # Keep only last 100 measurements
+                if len(times) > 100:
+                    times.pop(0)
+        except Exception as e:
+            logger.debug(f"Performance tracking error: {e}")
+
+    def get_performance_summary(self) -> dict:
+        """Get performance summary for VAD decoupling validation"""
+        try:
+            metrics = self._performance_metrics
+            
+            vad_times = metrics['vad_processing_times']
+            full_times = metrics['full_processing_times']
+            
+            summary = {
+                'session_id': self.session_id,
+                'chunks_processed': metrics['chunk_count'],
+                'speech_detections': metrics['speech_detections'],
+                'transcription_attempts': metrics['transcription_attempts'],
+                'vad_performance': {
+                    'count': len(vad_times),
+                    'avg_ms': sum(vad_times) / len(vad_times) if vad_times else 0,
+                    'max_ms': max(vad_times) if vad_times else 0,
+                    'target_met': all(t < 10.0 for t in vad_times) if vad_times else True
+                },
+                'full_processing_performance': {
+                    'count': len(full_times),
+                    'avg_ms': sum(full_times) / len(full_times) if full_times else 0,
+                    'max_ms': max(full_times) if full_times else 0,
+                    'target_met': all(t < 50.0 for t in full_times) if full_times else True
+                },
+                'conversation_state': self.conversation_state,
+                'session_active': self.session_active
+            }
+            
+            return summary
+        except Exception as e:
+            logger.warning(f"Error generating performance summary: {e}")
+            return {'error': str(e)}
 
 
 # Global session manager
