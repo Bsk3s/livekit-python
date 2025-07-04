@@ -13,7 +13,7 @@ from livekit.agents import tts
 logger = logging.getLogger(__name__)
 
 # 🔧 EASY CONFIGURATION: Change this to switch TTS models
-TTS_MODEL = os.getenv("TTS_MODEL", "mp3")  # openai, custom, gemini, elevenlabs, mp3
+TTS_MODEL = os.getenv("TTS_MODEL", "wav")  # openai, custom, gemini, elevenlabs, wav
 
 
 class TTSFactory:
@@ -44,11 +44,11 @@ class TTSFactory:
                 return TTSFactory._create_gemini_tts(character)
             elif model == "elevenlabs":
                 return TTSFactory._create_elevenlabs_tts(character)
-            elif model == "mp3":
-                return TTSFactory._create_mp3_tts(character)
+            elif model == "wav":
+                return TTSFactory._create_wav_tts(character)
             else:
                 logger.warning(f"⚠️ Unknown TTS model: {model}, falling back to MP3")
-                return TTSFactory._create_mp3_tts(character)
+                return TTSFactory._create_wav_tts(character)
 
         except Exception as e:
             logger.error(f"❌ Failed to create {model} TTS: {e}")
@@ -116,12 +116,12 @@ class TTSFactory:
             return TTSFactory._create_openai_tts(character)
 
     @staticmethod
-    def _create_mp3_tts(character: str) -> tts.TTS:
-        """Create MP3 TTS service"""
-        from .custom_tts_service import create_mp3_tts
+    def _create_wav_tts(character: str) -> tts.TTS:
+        """Create WAV TTS service"""
+        from .custom_tts_service import create_wav_tts
 
-        logger.info(f"✅ Creating MP3 TTS for {character}")
-        return create_mp3_tts(character)
+        logger.info(f"✅ Creating WAV TTS for {character}")
+        return create_wav_tts(character)
 
 
 # 🎯 TESTING UTILITIES

@@ -268,11 +268,11 @@ class AudioSession:
             self.llm_service = create_gpt4o_mini()
             logger.info(f"✅ LLM service initialized for session {self.session_id}")
 
-            # TTS Service - Using MP3 TTS service for iOS compatibility
-            logger.info(f"🎵 Creating MP3 TTS service for session {self.session_id}")
+            # TTS Service - Using WAV TTS service for iOS compatibility
+            logger.info(f"🎵 Creating WAV TTS service for session {self.session_id}")
             character_config = CharacterFactory.get_character_config(self.character)
-            self.tts_service = TTSFactory.create_tts(self.character, model_override="mp3")
-            logger.info(f"✅ MP3 TTS service initialized for session {self.session_id}")
+            self.tts_service = TTSFactory.create_tts(self.character, model_override="wav")
+            logger.info(f"✅ WAV TTS service initialized for session {self.session_id}")
 
             # Set initial conversation state
             logger.info(f"🛡️ Setting initial state to LISTENING for session {self.session_id}")
@@ -977,21 +977,21 @@ class AudioSession:
             return f"I apologize, I'm having a technical difficulty. Could you please try again?"
 
     async def synthesize_speech_chunk(self, text: str) -> bytes:
-        """Convert text chunk to speech in MP3 format"""
+        """Convert text chunk to speech in WAV format (iOS compatible)"""
         try:
-            logger.info(f"🎤 Starting MP3 TTS synthesis for: '{text[:50]}...'")
+            logger.info(f"🎤 Starting WAV TTS synthesis for: '{text[:50]}...'")
 
-            # Use the MP3 TTS service
+            # Use the WAV TTS service
             if self.tts_service:
-                # Get the MP3 audio data from the TTS service
-                # Since we're using MP3 format, we need to extract the raw MP3 data
-                return await self._get_mp3_from_tts_service(text)
+                # Get the WAV audio data from the TTS service
+                # Since we're using WAV format, we need to extract the raw WAV data
+                return await self._get_wav_from_tts_service(text)
             else:
                 # Fallback to direct API call
                 return await self._fallback_tts_synthesis(text)
 
         except Exception as e:
-            logger.error(f"❌ MP3 TTS synthesis error: {e}")
+            logger.error(f"❌ WAV TTS synthesis error: {e}")
             logger.error(f"❌ Error type: {type(e)}")
             import traceback
 
@@ -1000,33 +1000,33 @@ class AudioSession:
             # Return empty bytes as fallback
             return b""
 
-    async def _get_mp3_from_tts_service(self, text: str) -> bytes:
-        """Extract MP3 data from the TTS service"""
+    async def _get_wav_from_tts_service(self, text: str) -> bytes:
+        """Extract WAV data from the TTS service"""
         try:
-            # For MP3 TTS service, we need to get the raw MP3 data
+            # For WAV TTS service, we need to get the raw WAV data
             # This is a simplified approach - in practice, you'd need to modify the TTS service
-            # to return the raw MP3 bytes instead of audio frames
+            # to return the raw WAV bytes instead of audio frames
             
             # For now, use the fallback method which we know works
             return await self._fallback_tts_synthesis(text)
             
         except Exception as e:
-            logger.error(f"❌ Failed to get MP3 from TTS service: {e}")
+            logger.error(f"❌ Failed to get WAV from TTS service: {e}")
             return await self._fallback_tts_synthesis(text)
 
     async def _fallback_tts_synthesis(self, text: str) -> bytes:
-        """Fallback TTS synthesis using direct OpenAI API"""
+        """Fallback TTS synthesis using direct OpenAI API (WAV format for iOS compatibility)"""
         try:
             logger.info(f"🔄 Trying fallback TTS for: '{text[:30]}...'")
 
-            # Direct OpenAI TTS call
+            # Direct OpenAI TTS call with WAV output
             import openai
 
             response = await openai.AsyncOpenAI().audio.speech.create(
                 model="tts-1",
                 voice="nova" if self.character == "adina" else "onyx",
                 input=text,
-                response_format="mp3",
+                response_format="wav",  # Changed from mp3 to wav for iOS compatibility
             )
 
             audio_data = await response.aread()
@@ -1202,7 +1202,7 @@ class AudioSession:
                     # 🛡️ CRITICAL: TTS call with aggressive timeout protection
                     try:
                         logger.debug(f"🛡️ Starting TTS for chunk {i+1}...")
-                        mp3_audio = await asyncio.wait_for(
+                        wav_audio = await asyncio.wait_for(
                             self.synthesize_speech_chunk(chunk_text),
                             timeout=8.0  # Increased to 8s per chunk for more reliable streaming
                         )
@@ -1219,22 +1219,22 @@ class AudioSession:
                         logger.info(f"🎯 ✂️ TTS streaming cancelled before sending chunk {i+1}")
                         break
 
-                    if mp3_audio and websocket.client_state == WebSocketState.CONNECTED:
+                    if wav_audio and websocket.client_state == WebSocketState.CONNECTED:
                         chunk_duration = (time.time() - chunk_start_time) * 1000
 
-                        # 🔍 VALIDATION: Check MP3 output format
-                        base64_audio = base64.b64encode(mp3_audio).decode("utf-8")
+                        # 🔍 VALIDATION: Check WAV output format
+                        base64_audio = base64.b64encode(wav_audio).decode("utf-8")
                         base64_length = len(base64_audio)
 
-                        # Decode and check MP3 header
+                        # Decode and check WAV header
                         try:
-                            decoded_mp3 = base64.b64decode(base64_audio)
-                            is_valid_mp3 = len(decoded_mp3) >= 3 and decoded_mp3[:3] == b'ID3' or (decoded_mp3[0] == 0xFF and (decoded_mp3[1] & 0xE0) == 0xE0)
-                            mp3_size = len(decoded_mp3)
-                            logger.info(f"🔍 VALIDATION: MP3 output - Size: {mp3_size} bytes, Base64: {base64_length} chars, Valid MP3: {is_valid_mp3}")
+                            decoded_wav = base64.b64decode(base64_audio)
+                            is_valid_wav = len(decoded_wav) >= 44 and decoded_wav[:4] == b'RIFF' and decoded_wav[8:12] == b'WAVE'
+                            wav_size = len(decoded_wav)
+                            logger.info(f"🔍 VALIDATION: WAV output - Size: {wav_size} bytes, Base64: {base64_length} chars, Valid WAV: {is_valid_wav}")
                         except Exception as e:
-                            logger.error(f"🔍 VALIDATION: MP3 decode error: {e}")
-                            is_valid_mp3 = False
+                            logger.error(f"🔍 VALIDATION: WAV decode error: {e}")
+                            is_valid_wav = False
 
                         # Send audio chunk immediately
                         await websocket.send_json(
@@ -1257,7 +1257,7 @@ class AudioSession:
                         logger.info(
                             f"🎵 Sent chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars, {chunk_duration:.0f}ms)"
                         )
-                    elif not mp3_audio:
+                    elif not wav_audio:
                         logger.error(
                             f"❌ Failed to generate audio for chunk {i+1}: '{chunk_text[:30]}...'"
                         )
@@ -1634,12 +1634,12 @@ async def handle_json_message(
             character_obj = CharacterFactory.create_character(character)
             welcome_message = f"Hello! I'm {character.title()}. I'm here to listen and support you. How are you feeling today?"
 
-            # Generate MP3 audio for welcome message
+            # Generate WAV audio for welcome message
             try:
                 welcome_audio = await session._fallback_tts_synthesis(welcome_message)
                 if welcome_audio:
                     welcome_base64 = base64.b64encode(welcome_audio).decode("utf-8")
-                    logger.info(f"🎵 Generated welcome MP3: {len(welcome_audio)} bytes, {len(welcome_base64)} base64 chars")
+                    logger.info(f"🎵 Generated welcome WAV: {len(welcome_audio)} bytes, {len(welcome_base64)} base64 chars")
                 else:
                     logger.warning("⚠️ Failed to generate welcome audio, sending text only")
                     welcome_base64 = ""

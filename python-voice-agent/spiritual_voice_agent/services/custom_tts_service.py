@@ -15,14 +15,14 @@ from livekit.agents import tts
 logger = logging.getLogger(__name__)
 
 
-class MP3TTSService(tts.TTS):
+class WAVTTSService(tts.TTS):
     """
-    MP3 TTS Service - Uses direct OpenAI API for MP3 output
+    WAV TTS Service - Uses direct OpenAI API for WAV output (iOS compatible)
     Implements LiveKit TTS interface for compatibility
     """
 
     def __init__(self, character: str = "adina"):
-        """Initialize MP3 TTS service"""
+        """Initialize WAV TTS service"""
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True
@@ -42,45 +42,45 @@ class MP3TTSService(tts.TTS):
         
         self.voice = voice_map.get(character.lower(), "alloy")
         
-        logger.info(f"🎙️ MP3 TTS initialized for character: {character} (voice: {self.voice})")
+        logger.info(f"🎙️ WAV TTS initialized for character: {character} (voice: {self.voice})")
 
     async def synthesize(self, text: str) -> "tts.ChunkedStream":
         """
-        Synthesize text to MP3 audio using direct OpenAI API
+        Synthesize text to WAV audio using direct OpenAI API (iOS compatible)
         """
-        logger.info(f"🎤 MP3 TTS synthesis: '{text[:50]}...'")
+        logger.info(f"🎤 WAV TTS synthesis: '{text[:50]}...'")
 
         try:
-            # Use direct OpenAI API for MP3 output
+            # Use direct OpenAI API for WAV output (iOS compatible)
             import openai
             
             response = await openai.AsyncOpenAI().audio.speech.create(
                 model="tts-1",
                 voice=self.voice,
                 input=text,
-                response_format="mp3",
+                response_format="wav",  # Changed from mp3 to wav for iOS compatibility
             )
 
             audio_data = await response.aread()
-            logger.info(f"🎵 MP3 TTS generated: {len(audio_data)} bytes")
+            logger.info(f"🎵 WAV TTS generated: {len(audio_data)} bytes")
             
-            # Convert MP3 to LiveKit audio frames (simplified - just return as data)
-            return tts.ChunkedStream(self._mp3_to_audio_frames(audio_data))
+            # Convert WAV to LiveKit audio frames
+            return tts.ChunkedStream(self._wav_to_audio_frames(audio_data))
 
         except Exception as e:
-            logger.error(f"❌ MP3 TTS synthesis failed: {e}")
+            logger.error(f"❌ WAV TTS synthesis failed: {e}")
             # Return silence as fallback
             return tts.ChunkedStream(self._create_silence_stream())
 
-    def _mp3_to_audio_frames(self, mp3_data: bytes) -> AsyncGenerator[rtc.AudioFrame, None]:
-        """Convert MP3 data to LiveKit audio frames (simplified implementation)"""
+    def _wav_to_audio_frames(self, wav_data: bytes) -> AsyncGenerator[rtc.AudioFrame, None]:
+        """Convert WAV data to LiveKit audio frames"""
         
         async def frame_generator():
-            # For now, create a simple audio frame with the MP3 data
-            # In a full implementation, you'd decode the MP3 to PCM first
+            # For now, create a simple audio frame with the WAV data
+            # In a full implementation, you'd decode the WAV to PCM first
             
             # Create a dummy audio frame (this is a simplified approach)
-            # The actual audio processing will handle the MP3 data directly
+            # The actual audio processing will handle the WAV data directly
             dummy_audio = np.zeros(1600, dtype=np.int16)  # 100ms at 16kHz
             
             frame = rtc.AudioFrame(
@@ -262,6 +262,6 @@ def create_custom_tts(character: str = "default") -> CustomTTSService:
     )
 
 
-def create_mp3_tts(character: str = "default") -> MP3TTSService:
-    """Factory function to create MP3 TTS service"""
-    return MP3TTSService(character)
+def create_wav_tts(character: str = "default") -> WAVTTSService:
+    """Factory function to create WAV TTS service"""
+    return WAVTTSService(character)
