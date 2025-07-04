@@ -188,8 +188,8 @@ class AudioSession:
 
         # Enhanced voice activity detection
         self._recent_energy_levels = []  # Track recent energy levels
-        self._energy_threshold = 800  # Increased from 300 to reduce false positives
-        self._min_sustained_chunks = 1  # Require only 1 high-energy chunk for interruption (was 3)
+        self._energy_threshold = 100  # Lowered for real microphone input calibration
+        self._min_sustained_chunks = 1  # Require only 1 high-energy chunk for interruption (was 3) - kept low for real mic testing
         self._max_energy_history = 10  # Keep last 10 energy measurements
         self._last_speech_time = 0  # Track when we last detected speech
         self._speech_cooldown = 0.1  # Seconds to wait after speech before resetting (was 2.0)
@@ -566,7 +566,7 @@ class AudioSession:
                 if self._recent_energy_levels
                 else 0
             )
-            if should_process and recent_avg_energy < (self._energy_threshold * 0.6):
+            if should_process and recent_avg_energy < (self._energy_threshold * 0.3):  # Lowered from 0.6 for real mic sensitivity
                 logger.debug(
                     f"🔇 Skipping processing - recent avg energy too low: {recent_avg_energy:.1f}"
                 )
