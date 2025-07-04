@@ -1614,12 +1614,26 @@ async def handle_json_message(
             character_obj = CharacterFactory.create_character(character)
             welcome_message = f"Hello! I'm {character.title()}. I'm here to listen and support you. How are you feeling today?"
 
+            # Generate MP3 audio for welcome message
+            try:
+                welcome_audio = await session._fallback_tts_synthesis(welcome_message)
+                if welcome_audio:
+                    welcome_base64 = base64.b64encode(welcome_audio).decode("utf-8")
+                    logger.info(f"🎵 Generated welcome MP3: {len(welcome_audio)} bytes, {len(welcome_base64)} base64 chars")
+                else:
+                    logger.warning("⚠️ Failed to generate welcome audio, sending text only")
+                    welcome_base64 = ""
+            except Exception as e:
+                logger.error(f"❌ Error generating welcome audio: {e}")
+                welcome_base64 = ""
+
             # Send welcome as first response (but don't count as conversation turn)
             await websocket.send_json(
                 {
                     "type": "welcome_message",
                     "character": character,
                     "text": welcome_message,
+                    "audio": welcome_base64,
                     "conversation_state": session.conversation_state,
                     "timestamp": datetime.now().isoformat(),
                 }
