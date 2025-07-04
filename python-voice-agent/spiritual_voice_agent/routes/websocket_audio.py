@@ -189,10 +189,10 @@ class AudioSession:
         # Enhanced voice activity detection
         self._recent_energy_levels = []  # Track recent energy levels
         self._energy_threshold = 800  # Increased from 300 to reduce false positives
-        self._min_sustained_chunks = 3  # Require 3 consecutive high-energy chunks
+        self._min_sustained_chunks = 1  # Require only 1 high-energy chunk for interruption (was 3)
         self._max_energy_history = 10  # Keep last 10 energy measurements
         self._last_speech_time = 0  # Track when we last detected speech
-        self._speech_cooldown = 2.0  # Seconds to wait after speech before resetting
+        self._speech_cooldown = 0.1  # Seconds to wait after speech before resetting (was 2.0)
 
         # Performance monitoring for VAD decoupling
         self._performance_metrics = {
@@ -201,8 +201,19 @@ class AudioSession:
             'speech_detections': 0,
             'false_positives': 0,
             'transcription_attempts': 0,
-            'chunk_count': 0
+            'chunk_count': 0,
+            'interruptions': 0,
+            'interruption_latencies': []
         }
+
+        # 🎯 INTERRUPTION SYSTEM - Real-time conversation control
+        self._interruption_enabled = True  # Enable interruption capabilities
+        self._current_tts_task: Optional[asyncio.Task] = None  # Track current TTS streaming
+        self._response_chunks_sent = 0  # Track how many chunks we've sent
+        self._interruption_threshold = 1.5  # Confidence threshold for interruption (lower = more sensitive)
+        self._interruption_cooldown = 1.0  # Seconds to wait after interruption before allowing another
+        self._last_interruption_time = 0  # Track when last interruption occurred
+        self._stream_cancelled = False  # Flag to indicate if current stream was cancelled
 
         # Conversational session state management
         self.session_active = True  # Session is active for conversation
@@ -214,7 +225,7 @@ class AudioSession:
         self._state_change_time = time.time()  # When current state started
         self._watchdog_task: Optional[asyncio.Task] = None
         self._cleanup_queue = []  # Async cleanup tasks to run after responses
-        self._max_state_duration = 7.0  # Aggressive: Force reset after 7 seconds
+        self._max_state_duration = 15.0  # Allow time for longer LLM responses (12s + buffer)
         self._last_health_check = time.time()  # Quick health status cache
         self._current_websocket: Optional[WebSocket] = None  # Track current websocket connection
 
@@ -314,7 +325,7 @@ class AudioSession:
                 
                 if state_duration > self._max_state_duration:
                     logger.error(
-                        f"🛡️ WATCHDOG FORCE RESET: State '{self.conversation_state}' stuck for {state_duration:.1f}s - EMERGENCY RESET"
+                        f"🛡️ WATCHDOG FORCE RESET: State '{self.conversation_state}' stuck for {state_duration:.1f}s (max: {self._max_state_duration}s) - EMERGENCY RESET"
                     )
                     self._force_reset_state("LISTENING", f"watchdog_emergency_reset_after_{state_duration:.1f}s")
                     break  # Exit monitoring loop after reset
@@ -432,20 +443,16 @@ class AudioSession:
         # Track chunk processing
         self._track_performance_metric("chunk_processed")
         
-        # 🛡️ RELIABILITY: Pre-flight health checks (minimal latency)
-        if not self._is_healthy():
-            logger.warning(f"⚠️ Session unhealthy, skipping audio processing")
-            return None
-            
         try:
             # Check WebSocket connection state before processing
             if websocket.client_state != WebSocketState.CONNECTED:
                 logger.warning(f"⚠️ WebSocket not connected, skipping audio processing")
                 return None
 
-            # Check session activity (but not conversation state for VAD)
-            if not self.session_active:
-                logger.debug(f"Session inactive, skipping audio processing")
+            # 🎯 INTERRUPTION FIX: Always allow VAD processing for interruption detection
+            # Only check basic service availability, not session_active
+            if not (self.stt_service and self.llm_service and self.tts_service):
+                logger.warning(f"⚠️ Core services missing, skipping audio processing")
                 return None
 
             # ✅ ALWAYS-ON VAD: Always update activity time and process audio
@@ -463,9 +470,9 @@ class AudioSession:
             if len(self._recent_energy_levels) > self._max_energy_history:
                 self._recent_energy_levels.pop(0)
 
-            # ✅ ALWAYS-ON VAD: Always log audio energy for debugging (every 32KB to avoid spam)
+            # ✅ ALWAYS-ON VAD: Log audio energy for debugging (every 32KB to avoid spam)
             if len(self._audio_buffer) % 32000 == 0:  # Log every ~1 second
-                avg_energy = sum(self._recent_energy_levels) / len(self._recent_energy_levels)
+                avg_energy = sum(self._recent_energy_levels) / len(self._recent_energy_levels) if self._recent_energy_levels else 0
                 logger.info(
                     f"🎤 Audio energy: {audio_energy:.1f} | Avg: {avg_energy:.1f} | Threshold: {self._energy_threshold} | State: {self.conversation_state}"
                 )
@@ -506,22 +513,29 @@ class AudioSession:
                         }
                     )
                 
-                # State-aware logging
+                # State-aware logging and interruption detection
                 if self.conversation_state == "LISTENING":
                     logger.info(
                         f"🗣️ BACKEND HEARD YOU: Speech detected (energy: {audio_energy}, confidence: {confidence:.2f}) - WILL PROCESS"
                     )
+                elif self.conversation_state == "RESPONDING":
+                    logger.info(
+                        f"🗣️ BACKEND HEARD YOU: Speech detected during {self.conversation_state} (energy: {audio_energy}, confidence: {confidence:.2f}) - CHECKING FOR INTERRUPTION"
+                    )
+                    
+                    # 🎯 INTERRUPTION DETECTION: Check if user is trying to interrupt AI response
+                    await self._handle_potential_interruption(websocket, confidence, audio_energy, current_time)
                 else:
                     logger.info(
                         f"🗣️ BACKEND HEARD YOU: Speech detected during {self.conversation_state} (energy: {audio_energy}, confidence: {confidence:.2f}) - VAD ONLY"
                     )
 
-            # 🎯 STATE-AWARE TRANSCRIPTION: Only process transcription in LISTENING state
-            if self.conversation_state != "LISTENING":
+            # 🎯 STATE-AWARE TRANSCRIPTION: Only process transcription if session is active AND in LISTENING state
+            if not self.session_active or self.conversation_state != "LISTENING":
                 # VAD completed, but skip transcription processing
                 chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
                 self._track_performance_metric("vad_processing_time", chunk_duration_ms)
-                logger.debug(f"🔍 VAD-only processing: {chunk_duration_ms:.2f}ms (state: {self.conversation_state})")
+                logger.debug(f"🔍 VAD-only processing: {chunk_duration_ms:.2f}ms (active: {self.session_active}, state: {self.conversation_state})")
                 return None
 
             # TRANSCRIPTION PROCESSING: Only when in LISTENING state
@@ -766,6 +780,134 @@ class AudioSession:
 
         return min(0.95, max(0.1, final_confidence))
 
+    async def _handle_potential_interruption(self, websocket: WebSocket, confidence: float, audio_energy: float, current_time: float):
+        """
+        Handle potential user interruption during AI response.
+        
+        Analyzes speech confidence and energy to determine if user is trying to interrupt,
+        then cancels ongoing TTS streaming if criteria are met.
+        """
+        interruption_start_time = time.perf_counter()
+        
+        try:
+            # Check if interruption is enabled and not in cooldown
+            if not self._interruption_enabled:
+                logger.debug("🎯 Interruption disabled, ignoring speech during response")
+                return
+                
+            if current_time - self._last_interruption_time < self._interruption_cooldown:
+                logger.debug(f"🎯 Interruption cooldown active ({current_time - self._last_interruption_time:.1f}s), ignoring")
+                return
+            
+            # Check if confidence meets interruption threshold
+            if confidence < self._interruption_threshold:
+                logger.debug(f"🎯 Speech confidence {confidence:.2f} below interruption threshold {self._interruption_threshold}, ignoring")
+                return
+            
+            # Check if we have an active TTS stream to interrupt
+            if not self._current_tts_task or self._current_tts_task.done():
+                logger.debug("🎯 No active TTS stream to interrupt")
+                return
+            
+            # 🚨 INTERRUPTION TRIGGERED!
+            logger.info(f"🎯 🚨 INTERRUPTION DETECTED!")
+            logger.info(f"   - Confidence: {confidence:.2f} (threshold: {self._interruption_threshold})")
+            logger.info(f"   - Energy: {audio_energy:.1f}")
+            logger.info(f"   - Chunks sent before interruption: {self._response_chunks_sent}")
+            
+            # Cancel current TTS streaming
+            self._stream_cancelled = True
+            if self._current_tts_task:
+                self._current_tts_task.cancel()
+                logger.info("🎯 ✂️ TTS streaming cancelled")
+            
+            # Update interruption tracking
+            self._last_interruption_time = current_time
+            self._track_performance_metric("interruptions")
+            
+            # Calculate interruption latency
+            interruption_latency_ms = (time.perf_counter() - interruption_start_time) * 1000
+            self._track_performance_metric("interruption_latencies", interruption_latency_ms)
+            
+            # Send interruption event to client
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "interruption_detected",
+                    "confidence": confidence,
+                    "energy": audio_energy,
+                    "chunks_interrupted": self._response_chunks_sent,
+                    "interruption_latency_ms": interruption_latency_ms,
+                    "conversation_state": self.conversation_state,
+                    "timestamp": datetime.now().isoformat(),
+                })
+            
+            # Reset conversation state to LISTENING (user can now speak)
+            self._set_state("LISTENING")
+            
+            # Reset response tracking
+            self._response_chunks_sent = 0
+            
+            logger.info(f"🎯 ✅ Interruption handled in {interruption_latency_ms:.2f}ms - Ready for new input")
+            
+        except Exception as e:
+            logger.error(f"🎯 ❌ Error handling interruption: {e}")
+            # Don't let interruption errors break the conversation
+            # Just log and continue
+
+    def configure_interruption_sensitivity(self, threshold: float = 1.5, cooldown: float = 1.0):
+        """
+        Configure interruption sensitivity parameters.
+        
+        Args:
+            threshold: Confidence threshold for interruption (lower = more sensitive)
+            cooldown: Seconds to wait after interruption before allowing another
+        """
+        old_threshold = self._interruption_threshold
+        old_cooldown = self._interruption_cooldown
+        
+        self._interruption_threshold = max(0.5, min(3.0, threshold))  # Clamp between 0.5-3.0
+        self._interruption_cooldown = max(0.1, min(5.0, cooldown))    # Clamp between 0.1-5.0
+        
+        logger.info(f"🎯 Interruption sensitivity updated:")
+        logger.info(f"   - Threshold: {old_threshold:.1f} → {self._interruption_threshold:.1f}")
+        logger.info(f"   - Cooldown: {old_cooldown:.1f}s → {self._interruption_cooldown:.1f}s")
+
+    def enable_interruptions(self, enabled: bool = True):
+        """Enable or disable interruption detection"""
+        old_state = self._interruption_enabled
+        self._interruption_enabled = enabled
+        
+        status = "ENABLED" if enabled else "DISABLED"
+        logger.info(f"🎯 Interruption system {status} (was {'enabled' if old_state else 'disabled'})")
+        
+        return {"interruption_enabled": self._interruption_enabled}
+
+    def get_interruption_stats(self) -> dict:
+        """Get interruption performance statistics"""
+        stats = {
+            "interruption_enabled": self._interruption_enabled,
+            "interruption_threshold": self._interruption_threshold,
+            "interruption_cooldown": self._interruption_cooldown,
+            "total_interruptions": self._performance_metrics.get("interruptions", 0),
+            "interruption_latencies": self._performance_metrics.get("interruption_latencies", []),
+            "has_active_tts": self._current_tts_task is not None and not self._current_tts_task.done(),
+            "response_chunks_sent": self._response_chunks_sent,
+            "last_interruption_time": self._last_interruption_time
+        }
+        
+        # Calculate average interruption latency
+        latencies = stats["interruption_latencies"]
+        if latencies:
+            stats["avg_interruption_latency_ms"] = sum(latencies) / len(latencies)
+            stats["max_interruption_latency_ms"] = max(latencies)
+            stats["min_interruption_latency_ms"] = min(latencies)
+        else:
+            stats["avg_interruption_latency_ms"] = 0
+            stats["max_interruption_latency_ms"] = 0
+            stats["min_interruption_latency_ms"] = 0
+            
+        return stats
+
     async def generate_response(self, user_input: str) -> str:
         """Generate AI response using character personality"""
         try:
@@ -972,6 +1114,10 @@ class AudioSession:
             # 🛡️ RELIABILITY: Use state tracking for watchdog
             self._set_state("RESPONDING")
 
+            # 🎯 INTERRUPTION SYSTEM: Initialize response tracking
+            self._response_chunks_sent = 0
+            self._stream_cancelled = False
+
             # Send processing started event
             await websocket.send_json(
                 {
@@ -992,11 +1138,11 @@ class AudioSession:
                 logger.debug(f"🛡️ Starting LLM generation...")
                 response_text = await asyncio.wait_for(
                     self.generate_response(user_input),
-                    timeout=4.0  # Reduced to 4s - aggressive timeout
+                    timeout=12.0  # Increased to 12s for longer responses (especially during testing)
                 )
                 logger.debug(f"🛡️ LLM generation completed")
             except asyncio.TimeoutError:
-                logger.error(f"🛡️ LLM timeout after 4s - forcing reset")
+                logger.error(f"🛡️ LLM timeout after 12s - forcing reset")
                 self._force_reset_state("LISTENING", "llm_timeout")
                 return
             except Exception as llm_error:
@@ -1035,70 +1181,108 @@ class AudioSession:
                     }
                 )
 
-            # Process and stream each chunk
-            for i, chunk_text in enumerate(chunks):
-                # Check connection before processing each chunk
-                if websocket.client_state != WebSocketState.CONNECTED:
-                    logger.warning(f"⚠️ WebSocket disconnected during chunk {i+1}, stopping stream")
-                    break
+            # 🎯 INTERRUPTION SYSTEM: Create cancellable TTS streaming task
+            async def stream_tts_chunks():
+                """Cancellable TTS streaming function"""
+                for i, chunk_text in enumerate(chunks):
+                    # 🎯 Check for cancellation at start of each chunk
+                    if self._stream_cancelled:
+                        logger.info(f"🎯 ✂️ TTS streaming cancelled at chunk {i+1}/{len(chunks)}")
+                        break
+                        
+                    # Check connection before processing each chunk
+                    if websocket.client_state != WebSocketState.CONNECTED:
+                        logger.warning(f"⚠️ WebSocket disconnected during chunk {i+1}, stopping stream")
+                        break
 
-                chunk_start_time = time.time()
+                    chunk_start_time = time.time()
 
-                # 🛡️ CRITICAL: TTS call with aggressive timeout protection
-                try:
-                    logger.debug(f"🛡️ Starting TTS for chunk {i+1}...")
-                    wav_audio = await asyncio.wait_for(
-                        self.synthesize_speech_chunk(chunk_text),
-                        timeout=3.0  # Reduced to 3s per chunk - aggressive timeout
-                    )
-                    logger.debug(f"🛡️ TTS completed for chunk {i+1}")
-                except asyncio.TimeoutError:
-                    logger.error(f"🛡️ TTS timeout for chunk {i+1} - skipping")
-                    continue
-                except Exception as tts_error:
-                    logger.error(f"🛡️ TTS failed for chunk {i+1}: {tts_error}")
-                    continue
+                    # 🛡️ CRITICAL: TTS call with aggressive timeout protection
+                    try:
+                        logger.debug(f"🛡️ Starting TTS for chunk {i+1}...")
+                        wav_audio = await asyncio.wait_for(
+                            self.synthesize_speech_chunk(chunk_text),
+                            timeout=8.0  # Increased to 8s per chunk for more reliable streaming
+                        )
+                        logger.debug(f"🛡️ TTS completed for chunk {i+1}")
+                    except asyncio.TimeoutError:
+                        logger.error(f"🛡️ TTS timeout for chunk {i+1} after 8s - skipping")
+                        continue
+                    except Exception as tts_error:
+                        logger.error(f"🛡️ TTS failed for chunk {i+1}: {tts_error}")
+                        continue
 
-                if wav_audio and websocket.client_state == WebSocketState.CONNECTED:
-                    chunk_duration = (time.time() - chunk_start_time) * 1000
+                    # 🎯 Final cancellation check before sending
+                    if self._stream_cancelled:
+                        logger.info(f"🎯 ✂️ TTS streaming cancelled before sending chunk {i+1}")
+                        break
 
-                    # Send audio chunk immediately
+                    if wav_audio and websocket.client_state == WebSocketState.CONNECTED:
+                        chunk_duration = (time.time() - chunk_start_time) * 1000
+
+                        # Send audio chunk immediately
+                        await websocket.send_json(
+                            {
+                                "type": "audio_chunk",
+                                "chunk_id": i + 1,
+                                "total_chunks": len(chunks),
+                                "is_final": i == len(chunks) - 1,
+                                "text": chunk_text,
+                                "audio": base64.b64encode(wav_audio).decode("utf-8"),
+                                "character": self.character,
+                                "generation_time_ms": round(chunk_duration),
+                                "timestamp": datetime.now().isoformat(),
+                            }
+                        )
+
+                        # 🎯 Track successful chunk transmission
+                        self._response_chunks_sent += 1
+
+                        logger.info(
+                            f"🎵 Sent chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars, {chunk_duration:.0f}ms)"
+                        )
+                    elif not wav_audio:
+                        logger.error(
+                            f"❌ Failed to generate audio for chunk {i+1}: '{chunk_text[:30]}...'"
+                        )
+                    else:
+                        logger.warning(f"⚠️ WebSocket disconnected, cannot send chunk {i+1}")
+                        break
+
+            # 🎯 Execute TTS streaming with cancellation support
+            try:
+                self._current_tts_task = asyncio.create_task(stream_tts_chunks())
+                await self._current_tts_task
+                logger.info(f"🎯 TTS streaming completed normally")
+            except asyncio.CancelledError:
+                logger.info(f"🎯 ✂️ TTS streaming was cancelled by interruption")
+            finally:
+                self._current_tts_task = None
+
+            # Send completion notification (if still connected and not interrupted)
+            if websocket.client_state == WebSocketState.CONNECTED:
+                if self._stream_cancelled:
                     await websocket.send_json(
                         {
-                            "type": "audio_chunk",
-                            "chunk_id": i + 1,
-                            "total_chunks": len(chunks),
-                            "is_final": i == len(chunks) - 1,
-                            "text": chunk_text,
-                            "audio": base64.b64encode(wav_audio).decode("utf-8"),
+                            "type": "response_interrupted",
                             "character": self.character,
-                            "generation_time_ms": round(chunk_duration),
+                            "chunks_sent": self._response_chunks_sent,
+                            "total_chunks": len(chunks),
+                            "conversation_turn": self.conversation_turn_count,
                             "timestamp": datetime.now().isoformat(),
                         }
                     )
-
-                    logger.info(
-                        f"🎵 Sent chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars, {chunk_duration:.0f}ms)"
-                    )
-                elif not wav_audio:
-                    logger.error(
-                        f"❌ Failed to generate audio for chunk {i+1}: '{chunk_text[:30]}...'"
-                    )
+                    logger.info(f"🎯 ✂️ Response interrupted after {self._response_chunks_sent}/{len(chunks)} chunks")
                 else:
-                    logger.warning(f"⚠️ WebSocket disconnected, cannot send chunk {i+1}")
-                    break
-
-            # Send completion notification (if still connected)
-            if websocket.client_state == WebSocketState.CONNECTED:
-                await websocket.send_json(
-                    {
-                        "type": "response_complete",
-                        "character": self.character,
-                        "chunks_sent": len(chunks),
-                        "conversation_turn": self.conversation_turn_count,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                )
+                    await websocket.send_json(
+                        {
+                            "type": "response_complete",
+                            "character": self.character,
+                            "chunks_sent": self._response_chunks_sent,
+                            "conversation_turn": self.conversation_turn_count,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
 
             # 🛡️ RELIABILITY: Return to safe state BEFORE scheduling cleanup
             self._set_state("LISTENING")
@@ -1129,6 +1313,11 @@ class AudioSession:
                     logger.debug("Could not send error message - connection already closed")
                     
         finally:
+            # 🎯 INTERRUPTION SYSTEM: Reset tracking variables
+            self._current_tts_task = None
+            self._response_chunks_sent = 0
+            self._stream_cancelled = False
+            
             # 🛡️ GUARANTEED: Always ensure we're in a good state
             if self.conversation_state == "RESPONDING":
                 self._set_state("LISTENING")
@@ -1192,7 +1381,7 @@ class AudioSession:
             logger.warning(f"⚠️ Cleanup error for session {self.session_id}: {e}")
 
     def _track_performance_metric(self, metric_type: str, value: float = None):
-        """Track performance metrics for VAD decoupling monitoring"""
+        """Track performance metrics for VAD decoupling and interruption monitoring"""
         try:
             if metric_type == "chunk_processed":
                 self._performance_metrics['chunk_count'] += 1
@@ -1200,6 +1389,8 @@ class AudioSession:
                 self._performance_metrics['speech_detections'] += 1
             elif metric_type == "transcription_attempted":
                 self._performance_metrics['transcription_attempts'] += 1
+            elif metric_type == "interruptions":
+                self._performance_metrics['interruptions'] += 1
             elif metric_type == "vad_processing_time" and value is not None:
                 times = self._performance_metrics['vad_processing_times']
                 times.append(value)
@@ -1212,6 +1403,12 @@ class AudioSession:
                 # Keep only last 100 measurements
                 if len(times) > 100:
                     times.pop(0)
+            elif metric_type == "interruption_latencies" and value is not None:
+                latencies = self._performance_metrics['interruption_latencies']
+                latencies.append(value)
+                # Keep only last 50 measurements
+                if len(latencies) > 50:
+                    latencies.pop(0)
         except Exception as e:
             logger.debug(f"Performance tracking error: {e}")
 
@@ -1223,11 +1420,14 @@ class AudioSession:
             vad_times = metrics['vad_processing_times']
             full_times = metrics['full_processing_times']
             
+            interruption_latencies = metrics['interruption_latencies']
+            
             summary = {
                 'session_id': self.session_id,
                 'chunks_processed': metrics['chunk_count'],
                 'speech_detections': metrics['speech_detections'],
                 'transcription_attempts': metrics['transcription_attempts'],
+                'interruptions': metrics['interruptions'],
                 'vad_performance': {
                     'count': len(vad_times),
                     'avg_ms': sum(vad_times) / len(vad_times) if vad_times else 0,
@@ -1239,6 +1439,16 @@ class AudioSession:
                     'avg_ms': sum(full_times) / len(full_times) if full_times else 0,
                     'max_ms': max(full_times) if full_times else 0,
                     'target_met': all(t < 50.0 for t in full_times) if full_times else True
+                },
+                'interruption_performance': {
+                    'total_interruptions': metrics['interruptions'],
+                    'avg_latency_ms': sum(interruption_latencies) / len(interruption_latencies) if interruption_latencies else 0,
+                    'max_latency_ms': max(interruption_latencies) if interruption_latencies else 0,
+                    'min_latency_ms': min(interruption_latencies) if interruption_latencies else 0,
+                    'target_met': all(t < 50.0 for t in interruption_latencies) if interruption_latencies else True,  # Target <50ms
+                    'enabled': self._interruption_enabled,
+                    'threshold': self._interruption_threshold,
+                    'cooldown': self._interruption_cooldown
                 },
                 'conversation_state': self.conversation_state,
                 'session_active': self.session_active
@@ -1292,16 +1502,24 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                     session = await handle_json_message(websocket, session, message, session_id)
 
                 elif "bytes" in data:
-                    # Handle binary audio data with cost tracking
-                    if session and session.stt_service and session.session_active:
-                        audio_data = data["bytes"]
+                    # Handle binary audio data - ALWAYS process for VAD and interruption detection
+                    audio_data = data["bytes"]
+                    logger.info(f"🎯 AUDIO RECEIVED: {len(audio_data)} bytes, session={session is not None}")
+                    if session:
+                        logger.info(f"🎯 SESSION STATE: active={session.session_active}, conversation_state={session.conversation_state}, stt_service={session.stt_service is not None}")
+                    
+                    if session and session.stt_service:
+                        logger.info(f"🎯 PROCESSING AUDIO: {len(audio_data)} bytes in {session.conversation_state} state")
                         
                         # Calculate audio duration for cost tracking (16kHz, 16-bit, mono)
                         audio_duration_seconds = len(audio_data) / (16000 * 2)  # 2 bytes per sample
                         
+                        # 🎯 INTERRUPTION SYSTEM: Always process audio for VAD regardless of session_active
+                        # This enables interruption detection during RESPONDING state
                         transcription = await session.process_audio_chunk(audio_data, websocket)
 
-                        if transcription:
+                        # Only process conversation turns if session is active and we got transcription
+                        if transcription and session.session_active:
                             # Process complete conversation turn with zero-impact cost tracking
                             await session.process_conversation_turn(websocket, transcription, audio_duration_seconds)
                             # Reset for next conversation turn (but keep session alive)
@@ -1461,6 +1679,51 @@ async def handle_json_message(
 
         elif message_type == "ping":
             await websocket.send_json({"type": "pong"})
+
+        # 🎯 INTERRUPTION SYSTEM: Control commands
+        elif message_type == "configure_interruption":
+            if session:
+                threshold = message.get("threshold", 1.5)
+                cooldown = message.get("cooldown", 1.0)
+                session.configure_interruption_sensitivity(threshold, cooldown)
+                
+                await websocket.send_json({
+                    "type": "interruption_configured",
+                    "threshold": session._interruption_threshold,
+                    "cooldown": session._interruption_cooldown,
+                    "timestamp": datetime.now().isoformat()
+                })
+
+        elif message_type == "enable_interruption":
+            if session:
+                enabled = message.get("enabled", True)
+                result = session.enable_interruptions(enabled)
+                
+                await websocket.send_json({
+                    "type": "interruption_toggled",
+                    **result,
+                    "timestamp": datetime.now().isoformat()
+                })
+
+        elif message_type == "get_interruption_stats":
+            if session:
+                stats = session.get_interruption_stats()
+                
+                await websocket.send_json({
+                    "type": "interruption_stats",
+                    **stats,
+                    "timestamp": datetime.now().isoformat()
+                })
+
+        elif message_type == "get_performance_summary":
+            if session:
+                summary = session.get_performance_summary()
+                
+                await websocket.send_json({
+                    "type": "performance_summary",
+                    **summary,
+                    "timestamp": datetime.now().isoformat()
+                })
 
     except Exception as e:
         logger.error(f"❌ Error handling JSON message: {e}")
