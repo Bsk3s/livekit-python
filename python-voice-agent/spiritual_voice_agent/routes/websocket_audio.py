@@ -1008,6 +1008,9 @@ class AudioSession:
                 voice="nova" if self.character == "adina" else "onyx",
                 input=text,
                 response_format="wav",  # Changed from mp3 to wav for iOS compatibility
+                speed=1.0,  # Normal speed
+                # Note: OpenAI TTS doesn't support sample rate specification in the API
+                # We'll need to handle this differently
             )
 
             audio_data = await response.aread()
@@ -1047,6 +1050,50 @@ class AudioSession:
                                     audio_format == 1)  # PCM
                     
                     logger.info(f"🔍 iOS COMPATIBILITY: {ios_compatible}")
+                    
+                    # 🎯 FIX: If not iOS compatible, convert to iOS-compatible format
+                    if not ios_compatible and sample_rate == 24000:
+                        logger.info(f"🔄 Converting 24kHz WAV to iOS-compatible 22.05kHz")
+                        try:
+                            import wave
+                            import io
+                            import numpy as np
+                            from scipy import signal
+                            
+                            # Read the original WAV
+                            with io.BytesIO(audio_data) as wav_io:
+                                with wave.open(wav_io, 'rb') as wav_in:
+                                    # Get original parameters
+                                    frames = wav_in.readframes(wav_in.getnframes())
+                                    original_sample_rate = wav_in.getframerate()
+                                    channels = wav_in.getnchannels()
+                                    sample_width = wav_in.getsampwidth()
+                                    
+                                    # Convert to numpy array
+                                    audio_array = np.frombuffer(frames, dtype=np.int16)
+                                    
+                                    # Resample from 24kHz to 22.05kHz
+                                    target_sample_rate = 22050
+                                    resampled_audio = signal.resample(audio_array, 
+                                                                     int(len(audio_array) * target_sample_rate / original_sample_rate))
+                                    
+                                    # Convert back to int16
+                                    resampled_audio = (resampled_audio * 32767).astype(np.int16)
+                                    
+                                    # Create new WAV with iOS-compatible format
+                                    with io.BytesIO() as new_wav_io:
+                                        with wave.open(new_wav_io, 'wb') as wav_out:
+                                            wav_out.setnchannels(channels)
+                                            wav_out.setsampwidth(sample_width)
+                                            wav_out.setframerate(target_sample_rate)
+                                            wav_out.writeframes(resampled_audio.tobytes())
+                                        
+                                        audio_data = new_wav_io.getvalue()
+                                        logger.info(f"✅ Successfully converted to iOS-compatible 22.05kHz WAV: {len(audio_data)} bytes")
+                                        
+                        except Exception as conversion_error:
+                            logger.error(f"❌ WAV conversion failed: {conversion_error}")
+                            # Fall back to original audio
                     
                 except Exception as e:
                     logger.error(f"🔍 WAV HEADER PARSE ERROR: {e}")
