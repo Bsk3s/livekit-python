@@ -559,7 +559,7 @@ class AudioSession:
                 
                 # State-aware logging and interruption detection
                 if self.conversation_state == "LISTENING":
-                logger.info(
+                    logger.info(
                         f"🗣️ BACKEND HEARD YOU: Speech detected (energy: {audio_energy}, confidence: {confidence:.2f}) - WILL PROCESS"
                     )
                 elif self.conversation_state == "RESPONDING":
@@ -609,23 +609,23 @@ class AudioSession:
 
                 # 🛡️ RELIABILITY: Critical operation with adaptive timeout protection
                 try:
-                # Convert raw PCM to WAV format for Deepgram
-                wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
+                    # Convert raw PCM to WAV format for Deepgram
+                    wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
 
-                # Send transcription start event (check connection first)
-                if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_json(
-                        {
-                            "type": "transcription_partial",
-                            "text": "",
-                            "message": "Processing your speech...",
-                            "buffer_size": len(audio_bytes),
-                            "conversation_state": self.conversation_state,
+                    # Send transcription start event (check connection first)
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json(
+                            {
+                                "type": "transcription_partial",
+                                "text": "",
+                                "message": "Processing your speech...",
+                                "buffer_size": len(audio_bytes),
+                                "conversation_state": self.conversation_state,
                                 "processing_mode": processing_mode,
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
+                                "timestamp": datetime.now().isoformat(),
+                            }
+                        )
+                    logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
 
                     # 🛡️ CRITICAL: STT call with adaptive timeout 
                     logger.debug(f"🛡️ Starting STT transcription (mode: {processing_mode}, timeout: {timeout_seconds}s)...")
@@ -635,24 +635,24 @@ class AudioSession:
                     )
                     logger.debug(f"🛡️ STT transcription completed")
 
-                if transcription and transcription.strip():
-                    # Send complete transcription (check connection first)
-                    if websocket.client_state == WebSocketState.CONNECTED:
-                        await websocket.send_json(
-                            {
-                                "type": "transcription_complete",
-                                "text": transcription.strip(),
-                                "buffer_size": len(audio_bytes),
-                                "conversation_state": self.conversation_state,
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-                    logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
-                    logger.info(f"👤 User ({self.character}): '{transcription}'")
+                    if transcription and transcription.strip():
+                        # Send complete transcription (check connection first)
+                        if websocket.client_state == WebSocketState.CONNECTED:
+                            await websocket.send_json(
+                                {
+                                    "type": "transcription_complete",
+                                    "text": transcription.strip(),
+                                    "buffer_size": len(audio_bytes),
+                                    "conversation_state": self.conversation_state,
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
+                        logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
+                        logger.info(f"👤 User ({self.character}): '{transcription}'")
 
-                    # Increment conversation turn
-                    self.conversation_turn_count += 1
-                    logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
+                        # Increment conversation turn
+                        self.conversation_turn_count += 1
+                        logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
 
                         # 🛡️ RELIABILITY: Return to safe state BEFORE returning result
                         self._set_state("LISTENING")
@@ -662,21 +662,21 @@ class AudioSession:
                         self._track_performance_metric("full_processing_time", chunk_duration_ms)
                         logger.info(f"🔍 Full processing: {chunk_duration_ms:.2f}ms")
 
-                    return transcription.strip()
-                else:
-                    # Send empty transcription result (check connection first)
-                    if websocket.client_state == WebSocketState.CONNECTED:
-                        await websocket.send_json(
-                            {
-                                "type": "transcription_complete",
-                                "text": "",
-                                "message": "No speech detected in audio",
-                                "buffer_size": len(audio_bytes),
-                                "conversation_state": self.conversation_state,
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-                    logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
+                        return transcription.strip()
+                    else:
+                        # Send empty transcription result (check connection first)
+                        if websocket.client_state == WebSocketState.CONNECTED:
+                            await websocket.send_json(
+                                {
+                                    "type": "transcription_complete",
+                                    "text": "",
+                                    "message": "No speech detected in audio",
+                                    "buffer_size": len(audio_bytes),
+                                    "conversation_state": self.conversation_state,
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
+                        logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
 
                         # 🛡️ RELIABILITY: Return to safe state
                         self._set_state("LISTENING")
@@ -1123,7 +1123,7 @@ class AudioSession:
             logger.info(f"🎤 Starting WAV TTS synthesis for: '{text[:50]}...'")
 
             # Use direct OpenAI API for WAV output (most reliable approach)
-                return await self._fallback_tts_synthesis(text)
+            return await self._fallback_tts_synthesis(text)
 
         except Exception as e:
             logger.error(f"❌ WAV TTS synthesis error: {e}")
@@ -1742,7 +1742,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
 
                 elif "bytes" in data:
                     # Handle binary audio data - ALWAYS process for VAD and interruption detection
-                        audio_data = data["bytes"]
+                    audio_data = data["bytes"]
                     
                     # 🔍 VALIDATION: Check if receiving PCM vs WAV
                     first_bytes = audio_data[:100] if len(audio_data) >= 100 else audio_data
