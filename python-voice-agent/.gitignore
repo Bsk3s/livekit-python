@@ -80,3 +80,7 @@ livekit-cli.tar.gz
 # Deployment
 backend.log
 spiritual_agent.log
+
+# Model files
+*.onnx
+*.bin

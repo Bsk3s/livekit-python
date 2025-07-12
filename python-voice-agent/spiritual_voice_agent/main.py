@@ -3,8 +3,11 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+load_dotenv(find_dotenv())
 
 # Configure logging for production FIRST
 logging.basicConfig(
@@ -13,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import routes - no more sys.path hacks needed!
-from spiritual_voice_agent.routes import token, websocket_audio, metrics, cost
+from spiritual_voice_agent.routes import cost, metrics, token, websocket_audio
 
 
 @asynccontextmanager
@@ -22,13 +25,14 @@ async def lifespan(app: FastAPI):
     logger.info("🌟 Spiritual Guidance API starting up")
     logger.info(f"🔗 Environment: {os.getenv('ENVIRONMENT', 'development')}")
     logger.info(f"🎭 Available characters: Adina (compassionate), Raffa (wise)")
-    
+
     # 📊 METRICS: Initialize metrics service and cleanup old logs
     from spiritual_voice_agent.services.metrics_service import get_metrics_service
+
     metrics_service = get_metrics_service()
     await metrics_service.cleanup_old_logs()
     logger.info("📊 Metrics service initialized and old logs cleaned up")
-    
+
     yield
     # Shutdown
     logger.info("👋 Spiritual Guidance API shutting down")

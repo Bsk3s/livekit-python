@@ -13,6 +13,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 
 from spiritual_voice_agent.characters.character_factory import CharacterFactory
+
+# Cost Analytics imports for voice-first tracking
+from spiritual_voice_agent.services.cost_analytics import log_voice_event
 from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
 
 # Import existing services
@@ -21,8 +24,7 @@ from spiritual_voice_agent.services.stt.implementations.direct_deepgram import (
 )
 from spiritual_voice_agent.services.tts_factory import TTSFactory
 
-# Cost Analytics imports for voice-first tracking
-from spiritual_voice_agent.services.cost_analytics import log_voice_event
+from ..utils.audio import convert_to_ios_format
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -70,7 +72,7 @@ def pcm_to_wav(
     # Ensure PCM data is properly aligned (even number of bytes for 16-bit)
     if len(pcm_data) % 2 != 0:
         # Pad with zero if odd length
-        pcm_data = pcm_data + b'\x00'
+        pcm_data = pcm_data + b"\x00"
         logger.debug(f"🔧 Padded PCM data to even length: {len(pcm_data)} bytes")
 
     # Create WAV header
@@ -78,13 +80,13 @@ def pcm_to_wav(
 
     # Combine header + data
     wav_data = header + pcm_data
-    
+
     # Validate WAV format
-    if len(wav_data) >= 44 and wav_data[:4] == b'RIFF' and wav_data[8:12] == b'WAVE':
+    if len(wav_data) >= 44 and wav_data[:4] == b"RIFF" and wav_data[8:12] == b"WAVE":
         logger.debug(f"✅ Generated valid iOS-compatible WAV: {len(wav_data)} bytes")
     else:
         logger.warning(f"⚠️ Generated WAV may be invalid: {len(wav_data)} bytes")
-    
+
     return wav_data
 
 
@@ -165,22 +167,22 @@ def chunk_ai_response(full_response: str, max_chunk_length: int = 100) -> List[s
 class AudioSession:
     """
     Manages individual audio streaming sessions with reliability watchdog and cost tracking.
-    
+
     Enhanced with voice-first cost analytics that has ZERO impact on voice processing latency.
     Cost events are logged with fire-and-forget pattern - voice pipeline never waits.
-    
+
     VAD DECOUPLING IMPLEMENTATION:
     - VAD Processing: Always active regardless of conversation state
     - Speech Detection: Continuous monitoring with state context
     - Transcription: Only processed in LISTENING state
     - Buffer Management: Always accumulates audio data
-    
+
     PERFORMANCE BASELINE (Pre-Decoupling):
     - Audio chunk processing: <10ms target
     - VAD calculation: ~0.5ms per chunk
     - Memory usage: Stable during conversations
     - Speech detection accuracy: ~95% (measured)
-    
+
     VAD PARAMETERS (Documented for rollback):
     - Energy threshold: 800 (RMS threshold for speech detection)
     - Sustained chunks: 3 (consecutive high-energy chunks required)
@@ -213,41 +215,45 @@ class AudioSession:
 
         # 🎯 ADAPTIVE BUFFERING SYSTEM - Balance speed and accuracy
         self._adaptive_buffer_config = {
-            'quick_response_threshold': 20000,    # 20KB - Fast response for short phrases
-            'normal_speech_threshold': 50000,     # 50KB - Standard speech processing
-            'long_thought_threshold': 100000,     # 100KB - Longer thoughts/statements
-            'max_buffer_size': 150000,            # 150KB - Absolute maximum
-            'silence_detection_ms': 800,          # 800ms silence = speech complete
-            'min_speech_duration_ms': 300,        # 300ms minimum speech before processing
+            "quick_response_threshold": 20000,  # 20KB - Fast response for short phrases
+            "normal_speech_threshold": 50000,  # 50KB - Standard speech processing
+            "long_thought_threshold": 100000,  # 100KB - Longer thoughts/statements
+            "max_buffer_size": 150000,  # 150KB - Absolute maximum
+            "silence_detection_ms": 800,  # 800ms silence = speech complete
+            "min_speech_duration_ms": 300,  # 300ms minimum speech before processing
         }
         self._speech_start_time = None  # Track when speech started
         self._last_high_energy_time = None  # Track last high energy moment
-        self._buffer_processing_mode = 'quick'  # quick, normal, long_thought
+        self._buffer_processing_mode = "quick"  # quick, normal, long_thought
 
         # Performance monitoring for VAD decoupling
         self._performance_metrics = {
-            'vad_processing_times': [],
-            'full_processing_times': [],
-            'speech_detections': 0,
-            'false_positives': 0,
-            'transcription_attempts': 0,
-            'chunk_count': 0,
-            'interruptions': 0,
-            'interruption_latencies': [],
-            'adaptive_buffer_decisions': {
-                'quick_responses': 0,
-                'normal_speech': 0,
-                'long_thoughts': 0,
-                'buffer_timeouts': 0
-            }
+            "vad_processing_times": [],
+            "full_processing_times": [],
+            "speech_detections": 0,
+            "false_positives": 0,
+            "transcription_attempts": 0,
+            "chunk_count": 0,
+            "interruptions": 0,
+            "interruption_latencies": [],
+            "adaptive_buffer_decisions": {
+                "quick_responses": 0,
+                "normal_speech": 0,
+                "long_thoughts": 0,
+                "buffer_timeouts": 0,
+            },
         }
 
         # 🎯 INTERRUPTION SYSTEM - Real-time conversation control
         self._interruption_enabled = True  # Enable interruption capabilities
         self._current_tts_task: Optional[asyncio.Task] = None  # Track current TTS streaming
         self._response_chunks_sent = 0  # Track how many chunks we've sent
-        self._interruption_threshold = 1.5  # Confidence threshold for interruption (lower = more sensitive)
-        self._interruption_cooldown = 1.0  # Seconds to wait after interruption before allowing another
+        self._interruption_threshold = (
+            1.5  # Confidence threshold for interruption (lower = more sensitive)
+        )
+        self._interruption_cooldown = (
+            1.0  # Seconds to wait after interruption before allowing another
+        )
         self._last_interruption_time = 0  # Track when last interruption occurred
         self._stream_cancelled = False  # Flag to indicate if current stream was cancelled
 
@@ -256,7 +262,7 @@ class AudioSession:
         self.conversation_state = "LISTENING"  # LISTENING, PROCESSING, RESPONDING
         self.last_activity_time = time.time()  # Track activity for timeout management
         self.conversation_turn_count = 0  # Track number of conversation turns
-        
+
         # 🛡️ RELIABILITY WATCHDOG - Zero latency background monitoring
         self._state_change_time = time.time()  # When current state started
         self._watchdog_task: Optional[asyncio.Task] = None
@@ -289,9 +295,8 @@ class AudioSession:
 
             # TTS Service - Using WAV TTS service for iOS compatibility
             logger.info(f"🎵 Creating WAV TTS service for session {self.session_id}")
-            character_config = CharacterFactory.get_character_config(self.character)
-            self.tts_service = TTSFactory.create_tts(self.character, model_override="wav")
-            logger.info(f"✅ WAV TTS service initialized for session {self.session_id}")
+            # character_config = CharacterFactory.get_character_config(self.character)
+            self.tts_service = TTSFactory.create_tts(self.character, model_override="kokoro")
 
             # Set initial conversation state
             logger.info(f"🛡️ Setting initial state to LISTENING for session {self.session_id}")
@@ -311,6 +316,7 @@ class AudioSession:
             logger.error(f"❌ Failed to initialize session {self.session_id}: {e}")
             logger.error(f"❌ Exception type: {type(e).__name__}")
             import traceback
+
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
             # 🛡️ GUARANTEED RESET: Always return to safe state
             self._force_reset_state("LISTENING", f"initialization_error: {e}")
@@ -328,7 +334,7 @@ class AudioSession:
         """Start background watchdog timer (runs independently, zero latency impact)"""
         if self._watchdog_task and not self._watchdog_task.done():
             self._watchdog_task.cancel()
-        
+
         logger.info(f"🛡️ Starting watchdog for session {self.session_id}")
         self._watchdog_task = asyncio.create_task(self._watchdog_monitor())
         logger.debug(f"🛡️ Watchdog task created: {self._watchdog_task}")
@@ -341,31 +347,35 @@ class AudioSession:
             while self.session_active:
                 await asyncio.sleep(0.5)  # Check more frequently - every 500ms
                 check_count += 1
-                
+
                 # Skip monitoring if in LISTENING state (safe state)
                 if self.conversation_state == "LISTENING":
                     if check_count % 10 == 0:  # Log every 5 seconds when in LISTENING
                         logger.debug(f"🛡️ Watchdog check #{check_count}: LISTENING state (safe)")
                     continue
-                
+
                 state_duration = time.time() - self._state_change_time
-                
+
                 # Log every check when not in LISTENING state
-                logger.debug(f"🛡️ Watchdog check #{check_count}: State '{self.conversation_state}' for {state_duration:.1f}s")
-                
+                logger.debug(
+                    f"🛡️ Watchdog check #{check_count}: State '{self.conversation_state}' for {state_duration:.1f}s"
+                )
+
                 # More aggressive monitoring with warnings
                 if state_duration > 5.0:
                     logger.warning(
                         f"🛡️ WATCHDOG WARNING: State '{self.conversation_state}' running for {state_duration:.1f}s"
                     )
-                
+
                 if state_duration > self._max_state_duration:
                     logger.error(
                         f"🛡️ WATCHDOG FORCE RESET: State '{self.conversation_state}' stuck for {state_duration:.1f}s (max: {self._max_state_duration}s) - EMERGENCY RESET"
                     )
-                    self._force_reset_state("LISTENING", f"watchdog_emergency_reset_after_{state_duration:.1f}s")
+                    self._force_reset_state(
+                        "LISTENING", f"watchdog_emergency_reset_after_{state_duration:.1f}s"
+                    )
                     break  # Exit monitoring loop after reset
-                    
+
         except asyncio.CancelledError:
             logger.info(f"🛡️ Watchdog cancelled for session {self.session_id}")
         except Exception as e:
@@ -375,42 +385,48 @@ class AudioSession:
 
     def _force_reset_state(self, target_state: str = "LISTENING", reason: str = "unknown"):
         """Force immediate state reset (emergency recovery, minimal latency)"""
-        logger.error(f"🛡️ EMERGENCY FORCE RESET: {self.conversation_state} → {target_state} (reason: {reason})")
-        
+        logger.error(
+            f"🛡️ EMERGENCY FORCE RESET: {self.conversation_state} → {target_state} (reason: {reason})"
+        )
+
         # Immediate state reset
         old_state = self.conversation_state
         self._set_state(target_state)
-        
+
         # Clear processing flags immediately
         self._processing_audio = False
-        
+
         # Force cleanup of buffers immediately
         self._audio_buffer.clear()
-        
+
         # 🛡️ NOTIFY CLIENT: Send error response so client doesn't hang
-        if hasattr(self, '_current_websocket') and self._current_websocket:
+        if hasattr(self, "_current_websocket") and self._current_websocket:
             try:
                 asyncio.create_task(self._send_watchdog_error(reason))
             except Exception as e:
                 logger.warning(f"⚠️ Could not send watchdog error to client: {e}")
-        
+
         # Log emergency reset for monitoring
-        logger.error(f"🚨 EMERGENCY: Session {self.session_id} force reset from {old_state} after {reason}")
-        
+        logger.error(
+            f"🚨 EMERGENCY: Session {self.session_id} force reset from {old_state} after {reason}"
+        )
+
         # Schedule heavy cleanup for later (zero latency)
         self._schedule_cleanup(f"emergency_reset_{reason}")
-    
+
     async def _send_watchdog_error(self, reason: str):
         """Send error response to client when watchdog triggers"""
         try:
             if self._current_websocket:
-                await self._current_websocket.send_json({
-                    "type": "error",
-                    "message": f"Request timeout - system reset for reliability",
-                    "reason": reason,
-                    "conversation_state": self.conversation_state,
-                    "timestamp": datetime.now().isoformat(),
-                })
+                await self._current_websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": f"Request timeout - system reset for reliability",
+                        "reason": reason,
+                        "conversation_state": self.conversation_state,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
                 logger.info(f"🛡️ Sent watchdog error to client: {reason}")
         except Exception as e:
             logger.warning(f"⚠️ Failed to send watchdog error: {e}")
@@ -419,7 +435,7 @@ class AudioSession:
         """Schedule cleanup to happen asynchronously (zero latency impact)"""
         cleanup_task = asyncio.create_task(self._async_cleanup(reason))
         self._cleanup_queue.append(cleanup_task)
-        
+
         # Keep only last 5 cleanup tasks
         while len(self._cleanup_queue) > 5:
             old_task = self._cleanup_queue.pop(0)
@@ -431,54 +447,57 @@ class AudioSession:
         try:
             # Clear buffers
             self._audio_buffer.clear()
-            
+
             # Reset energy tracking
             if len(self._recent_energy_levels) > 5:
                 self._recent_energy_levels = self._recent_energy_levels[-3:]
-            
+
             # Update activity time
             self.last_activity_time = time.time()
-            
+
             # Force garbage collection for memory cleanup
             import gc
+
             gc.collect()
-            
-            logger.debug(f"🧹 Async cleanup completed for session {self.session_id} (reason: {reason})")
-            
+
+            logger.debug(
+                f"🧹 Async cleanup completed for session {self.session_id} (reason: {reason})"
+            )
+
         except Exception as e:
             logger.warning(f"⚠️ Async cleanup error: {e}")
 
     def _is_healthy(self) -> bool:
         """Quick health check (cached for 1 second, minimal latency)"""
         current_time = time.time()
-        
+
         # Use cached result if checked recently
         if current_time - self._last_health_check < 1.0:
             return True
-        
+
         self._last_health_check = current_time
-        
+
         # Quick checks only (no network calls)
         return (
-            self.session_active and 
-            self.stt_service is not None and 
-            self.llm_service is not None and 
-            self.tts_service is not None
+            self.session_active
+            and self.stt_service is not None
+            and self.llm_service is not None
+            and self.tts_service is not None
         )
 
     async def process_audio_chunk(self, audio_data: bytes, websocket: WebSocket) -> Optional[str]:
         """
         Process incoming audio chunk with always-on VAD and state-aware transcription.
-        
+
         VAD Processing: Always active regardless of conversation state
         Transcription Processing: Only in LISTENING state
         """
         # Performance monitoring for VAD decoupling
         chunk_start_time = time.perf_counter()
-        
+
         # Track chunk processing
         self._track_performance_metric("chunk_processed")
-        
+
         try:
             # Check WebSocket connection state before processing
             if websocket.client_state != WebSocketState.CONNECTED:
@@ -506,18 +525,6 @@ class AudioSession:
             if len(self._recent_energy_levels) > self._max_energy_history:
                 self._recent_energy_levels.pop(0)
 
-            # ✅ ALWAYS-ON VAD: Log audio energy for debugging (every 32KB to avoid spam)
-            if len(self._audio_buffer) % 32000 == 0:  # Log every ~1 second
-                avg_energy = sum(self._recent_energy_levels) / len(self._recent_energy_levels) if self._recent_energy_levels else 0
-                logger.info(
-                    f"🎤 Audio energy: {audio_energy:.1f} | Avg: {avg_energy:.1f} | Threshold: {self._energy_threshold} | State: {self.conversation_state}"
-                )
-                
-                # 🔍 VALIDATION: Detailed energy analysis for real audio debugging
-                if audio_energy > 0:  # Only log when we have actual audio
-                    logger.info(f"🔍 VALIDATION: Energy analysis - Current: {audio_energy:.1f}, Threshold: {self._energy_threshold}, Above threshold: {audio_energy > self._energy_threshold}")
-                    logger.info(f"🔍 VALIDATION: Buffer size: {len(self._audio_buffer)} bytes, Recent energies: {self._recent_energy_levels[-3:] if len(self._recent_energy_levels) >= 3 else self._recent_energy_levels}")
-
             # ✅ ALWAYS-ON VAD: Always perform speech detection regardless of conversation state
             speech_detected = self._detect_sustained_speech(audio_energy, current_time)
 
@@ -528,7 +535,7 @@ class AudioSession:
             if speech_detected and not self._processing_audio:
                 self._processing_audio = True
                 self._last_speech_time = current_time
-                
+
                 # Track speech detection
                 self._track_performance_metric("speech_detected")
 
@@ -556,7 +563,7 @@ class AudioSession:
                             "timestamp": datetime.now().isoformat(),
                         }
                     )
-                
+
                 # State-aware logging and interruption detection
                 if self.conversation_state == "LISTENING":
                     logger.info(
@@ -566,9 +573,11 @@ class AudioSession:
                     logger.info(
                         f"🗣️ BACKEND HEARD YOU: Speech detected during {self.conversation_state} (energy: {audio_energy}, confidence: {confidence:.2f}) - CHECKING FOR INTERRUPTION"
                     )
-                    
+
                     # 🎯 INTERRUPTION DETECTION: Check if user is trying to interrupt AI response
-                    await self._handle_potential_interruption(websocket, confidence, audio_energy, current_time)
+                    await self._handle_potential_interruption(
+                        websocket, confidence, audio_energy, current_time
+                    )
                 else:
                     logger.info(
                         f"🗣️ BACKEND HEARD YOU: Speech detected during {self.conversation_state} (energy: {audio_energy}, confidence: {confidence:.2f}) - VAD ONLY"
@@ -579,17 +588,21 @@ class AudioSession:
                 # VAD completed, but skip transcription processing
                 chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
                 self._track_performance_metric("vad_processing_time", chunk_duration_ms)
-                logger.debug(f"🔍 VAD-only processing: {chunk_duration_ms:.2f}ms (active: {self.session_active}, state: {self.conversation_state})")
+                logger.debug(
+                    f"🔍 VAD-only processing: {chunk_duration_ms:.2f}ms (active: {self.session_active}, state: {self.conversation_state})"
+                )
                 return None
 
             # 🎯 ADAPTIVE BUFFERING: Smart buffer processing with speed/accuracy balance
             buffer_size = len(self._audio_buffer)
-            should_process, process_reason, processing_mode = self._should_process_buffer(buffer_size, current_time)
+            should_process, process_reason, processing_mode = self._should_process_buffer(
+                buffer_size, current_time
+            )
 
             if should_process:
                 # Track transcription attempt
                 self._track_performance_metric("transcription_attempted")
-                
+
                 # 🛡️ RELIABILITY: Use state tracking for watchdog
                 self._set_state("PROCESSING")
 
@@ -605,12 +618,16 @@ class AudioSession:
                 # Get adaptive timeout based on processing mode
                 timeout_seconds = self._get_processing_timeout(processing_mode)
 
-                logger.info(f"📝 Processing audio buffer: {process_reason} (mode: {processing_mode}, timeout: {timeout_seconds}s)")
+                # logger.info(
+                #     f"📝 Processing audio buffer: {process_reason} (mode: {processing_mode}, timeout: {timeout_seconds}s)"
+                # )
 
                 # 🛡️ RELIABILITY: Critical operation with adaptive timeout protection
                 try:
                     # Convert raw PCM to WAV format for Deepgram
-                    wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
+                    wav_audio = pcm_to_wav(
+                        audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16
+                    )
 
                     # Send transcription start event (check connection first)
                     if websocket.client_state == WebSocketState.CONNECTED:
@@ -627,11 +644,12 @@ class AudioSession:
                         )
                     logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
 
-                    # 🛡️ CRITICAL: STT call with adaptive timeout 
-                    logger.debug(f"🛡️ Starting STT transcription (mode: {processing_mode}, timeout: {timeout_seconds}s)...")
+                    # 🛡️ CRITICAL: STT call with adaptive timeout
+                    logger.debug(
+                        f"🛡️ Starting STT transcription (mode: {processing_mode}, timeout: {timeout_seconds}s)..."
+                    )
                     transcription = await asyncio.wait_for(
-                        self.stt_service.transcribe_audio_bytes(wav_audio),
-                        timeout=timeout_seconds
+                        self.stt_service.transcribe_audio_bytes(wav_audio), timeout=timeout_seconds
                     )
                     logger.debug(f"🛡️ STT transcription completed")
 
@@ -656,7 +674,7 @@ class AudioSession:
 
                         # 🛡️ RELIABILITY: Return to safe state BEFORE returning result
                         self._set_state("LISTENING")
-                        
+
                         # Performance logging
                         chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
                         self._track_performance_metric("full_processing_time", chunk_duration_ms)
@@ -682,9 +700,11 @@ class AudioSession:
                         self._set_state("LISTENING")
 
                 except asyncio.TimeoutError:
-                    logger.error(f"🛡️ STT timeout after {timeout_seconds}s (mode: {processing_mode}) - forcing reset")
+                    logger.error(
+                        f"🛡️ STT timeout after {timeout_seconds}s (mode: {processing_mode}) - forcing reset"
+                    )
                     self._force_reset_state("LISTENING", f"stt_timeout_{processing_mode}")
-                    
+
                 except Exception as stt_error:
                     logger.error(f"🛡️ STT processing failed: {stt_error}")
                     self._force_reset_state("LISTENING", f"stt_error: {stt_error}")
@@ -696,10 +716,10 @@ class AudioSession:
 
         except Exception as e:
             logger.error(f"❌ Audio processing error in session {self.session_id}: {e}")
-            
+
             # 🛡️ GUARANTEED CLEANUP: Always reset state on any error
             self._force_reset_state("LISTENING", f"audio_chunk_error: {e}")
-            
+
             # Send error event to frontend (only if connection is active)
             if websocket.client_state == WebSocketState.CONNECTED:
                 try:
@@ -784,68 +804,91 @@ class AudioSession:
         # Calculate energy variance (lower variance = more consistent = higher confidence)
         mean_energy = sum(recent_energies) / len(recent_energies)
         variance = sum((e - mean_energy) ** 2 for e in recent_energies) / len(recent_energies)
-        
+
         # Normalize variance to 0-1 scale (lower variance = higher confidence)
         max_variance = mean_energy * 2  # Reasonable maximum variance
         consistency_score = max(0, 1 - (variance / max_variance))
-        
+
         # Calculate energy level score (higher energy = higher confidence)
         energy_score = min(1.0, mean_energy / (self._energy_threshold * 2))
-        
+
         # Combine scores (consistency is more important than absolute energy)
         confidence = (consistency_score * 0.7) + (energy_score * 0.3)
-        
+
         return min(1.0, max(0.0, confidence))
 
     # 🎯 ADAPTIVE BUFFERING METHODS - Smart buffer management
-    def _should_process_buffer(self, buffer_size: int, current_time: float) -> tuple[bool, str, str]:
+    def _should_process_buffer(
+        self, buffer_size: int, current_time: float
+    ) -> tuple[bool, str, str]:
         """
         Determine if audio buffer should be processed based on adaptive thresholds.
-        
+
         Returns:
             (should_process, reason, mode)
         """
         config = self._adaptive_buffer_config
-        
+
         # Check if we have any speech at all
         if not self._speech_start_time:
             return False, "no_speech_started", "none"
-        
+
         speech_duration = (current_time - self._speech_start_time) * 1000  # Convert to ms
-        
+
         # Check minimum speech duration
-        if speech_duration < config['min_speech_duration_ms']:
+        if speech_duration < config["min_speech_duration_ms"]:
             return False, f"speech_too_short_{speech_duration:.0f}ms", "none"
-        
+
         # Check for silence (speech complete)
         silence_duration = 0
         if self._last_high_energy_time:
             silence_duration = (current_time - self._last_high_energy_time) * 1000
-        
+
         # Quick response mode: Small buffer + silence detection
-        if buffer_size >= config['quick_response_threshold'] and silence_duration >= config['silence_detection_ms']:
-            self._buffer_processing_mode = 'quick'
-            self._performance_metrics['adaptive_buffer_decisions']['quick_responses'] += 1
-            return True, f"quick_response_{buffer_size}bytes_{silence_duration:.0f}ms_silence", 'quick'
-        
+        if (
+            buffer_size >= config["quick_response_threshold"]
+            and silence_duration >= config["silence_detection_ms"]
+        ):
+            self._buffer_processing_mode = "quick"
+            self._performance_metrics["adaptive_buffer_decisions"]["quick_responses"] += 1
+            return (
+                True,
+                f"quick_response_{buffer_size}bytes_{silence_duration:.0f}ms_silence",
+                "quick",
+            )
+
         # Normal speech mode: Medium buffer + silence detection
-        if buffer_size >= config['normal_speech_threshold'] and silence_duration >= config['silence_detection_ms']:
-            self._buffer_processing_mode = 'normal'
-            self._performance_metrics['adaptive_buffer_decisions']['normal_speech'] += 1
-            return True, f"normal_speech_{buffer_size}bytes_{silence_duration:.0f}ms_silence", 'normal'
-        
+        if (
+            buffer_size >= config["normal_speech_threshold"]
+            and silence_duration >= config["silence_detection_ms"]
+        ):
+            self._buffer_processing_mode = "normal"
+            self._performance_metrics["adaptive_buffer_decisions"]["normal_speech"] += 1
+            return (
+                True,
+                f"normal_speech_{buffer_size}bytes_{silence_duration:.0f}ms_silence",
+                "normal",
+            )
+
         # Long thought mode: Large buffer + silence detection
-        if buffer_size >= config['long_thought_threshold'] and silence_duration >= config['silence_detection_ms']:
-            self._buffer_processing_mode = 'long_thought'
-            self._performance_metrics['adaptive_buffer_decisions']['long_thoughts'] += 1
-            return True, f"long_thought_{buffer_size}bytes_{silence_duration:.0f}ms_silence", 'long_thought'
-        
+        if (
+            buffer_size >= config["long_thought_threshold"]
+            and silence_duration >= config["silence_detection_ms"]
+        ):
+            self._buffer_processing_mode = "long_thought"
+            self._performance_metrics["adaptive_buffer_decisions"]["long_thoughts"] += 1
+            return (
+                True,
+                f"long_thought_{buffer_size}bytes_{silence_duration:.0f}ms_silence",
+                "long_thought",
+            )
+
         # Emergency timeout: Prevent buffer overflow
-        if buffer_size >= config['max_buffer_size']:
-            self._buffer_processing_mode = 'timeout'
-            self._performance_metrics['adaptive_buffer_decisions']['buffer_timeouts'] += 1
-            return True, f"buffer_timeout_{buffer_size}bytes", 'timeout'
-        
+        if buffer_size >= config["max_buffer_size"]:
+            self._buffer_processing_mode = "timeout"
+            self._performance_metrics["adaptive_buffer_decisions"]["buffer_timeouts"] += 1
+            return True, f"buffer_timeout_{buffer_size}bytes", "timeout"
+
         return False, f"waiting_{buffer_size}bytes_{silence_duration:.0f}ms_silence", "waiting"
 
     def _update_speech_tracking(self, audio_energy: float, current_time: float):
@@ -856,11 +899,11 @@ class AudioSession:
         if audio_energy > self._energy_threshold and not self._speech_start_time:
             self._speech_start_time = current_time
             logger.debug(f"🎤 Speech started at {current_time}")
-        
+
         # Track last high energy moment
         if audio_energy > self._energy_threshold:
             self._last_high_energy_time = current_time
-        
+
         # Reset speech tracking if no energy for a while
         if self._last_high_energy_time and (current_time - self._last_high_energy_time) > 2.0:
             self._speech_start_time = None
@@ -872,10 +915,10 @@ class AudioSession:
         Get appropriate timeout for different processing modes.
         """
         timeouts = {
-            'quick': 3.0,      # 3s for short phrases
-            'normal': 5.0,     # 5s for normal speech
-            'long_thought': 8.0,  # 8s for longer thoughts
-            'timeout': 5.0     # 5s for emergency processing
+            "quick": 3.0,  # 3s for short phrases
+            "normal": 5.0,  # 5s for normal speech
+            "long_thought": 8.0,  # 8s for longer thoughts
+            "timeout": 5.0,  # 5s for emergency processing
         }
         return timeouts.get(mode, 5.0)
 
@@ -885,37 +928,39 @@ class AudioSession:
         """
         config = self._adaptive_buffer_config
         current_time = time.time()
-        
+
         # Calculate current speech duration
         speech_duration_ms = 0
         if self._speech_start_time:
             speech_duration_ms = (current_time - self._speech_start_time) * 1000
-        
+
         # Calculate current silence duration
         silence_duration_ms = 0
         if self._last_high_energy_time:
             silence_duration_ms = (current_time - self._last_high_energy_time) * 1000
-        
+
         return {
-            'buffer_size': len(self._audio_buffer),
-            'processing_mode': self._buffer_processing_mode,
-            'speech_started': self._speech_start_time is not None,
-            'speech_duration_ms': speech_duration_ms,
-            'silence_duration_ms': silence_duration_ms,
-            'config': config,
-            'performance_metrics': self._performance_metrics['adaptive_buffer_decisions']
+            "buffer_size": len(self._audio_buffer),
+            "processing_mode": self._buffer_processing_mode,
+            "speech_started": self._speech_start_time is not None,
+            "speech_duration_ms": speech_duration_ms,
+            "silence_duration_ms": silence_duration_ms,
+            "config": config,
+            "performance_metrics": self._performance_metrics["adaptive_buffer_decisions"],
         }
 
-    def configure_adaptive_buffering(self, 
-                                   quick_response_threshold: int = None,
-                                   normal_speech_threshold: int = None,
-                                   long_thought_threshold: int = None,
-                                   max_buffer_size: int = None,
-                                   silence_detection_ms: int = None,
-                                   min_speech_duration_ms: int = None):
+    def configure_adaptive_buffering(
+        self,
+        quick_response_threshold: int = None,
+        normal_speech_threshold: int = None,
+        long_thought_threshold: int = None,
+        max_buffer_size: int = None,
+        silence_detection_ms: int = None,
+        min_speech_duration_ms: int = None,
+    ):
         """
         Configure adaptive buffering parameters dynamically.
-        
+
         Args:
             quick_response_threshold: 20KB default - Fast response for short phrases
             normal_speech_threshold: 50KB default - Standard speech processing
@@ -925,93 +970,105 @@ class AudioSession:
             min_speech_duration_ms: 300ms default - Minimum speech duration before processing
         """
         config = self._adaptive_buffer_config
-        
+
         if quick_response_threshold is not None:
-            config['quick_response_threshold'] = quick_response_threshold
+            config["quick_response_threshold"] = quick_response_threshold
         if normal_speech_threshold is not None:
-            config['normal_speech_threshold'] = normal_speech_threshold
+            config["normal_speech_threshold"] = normal_speech_threshold
         if long_thought_threshold is not None:
-            config['long_thought_threshold'] = long_thought_threshold
+            config["long_thought_threshold"] = long_thought_threshold
         if max_buffer_size is not None:
-            config['max_buffer_size'] = max_buffer_size
+            config["max_buffer_size"] = max_buffer_size
         if silence_detection_ms is not None:
-            config['silence_detection_ms'] = silence_detection_ms
+            config["silence_detection_ms"] = silence_detection_ms
         if min_speech_duration_ms is not None:
-            config['min_speech_duration_ms'] = min_speech_duration_ms
-        
+            config["min_speech_duration_ms"] = min_speech_duration_ms
+
         logger.info(f"🎯 Adaptive buffering configured: {config}")
-        
+
         return config
 
-    async def _handle_potential_interruption(self, websocket: WebSocket, confidence: float, audio_energy: float, current_time: float):
+    async def _handle_potential_interruption(
+        self, websocket: WebSocket, confidence: float, audio_energy: float, current_time: float
+    ):
         """
         Handle potential user interruption during AI response.
-        
+
         Analyzes speech confidence and energy to determine if user is trying to interrupt,
         then cancels ongoing TTS streaming if criteria are met.
         """
         interruption_start_time = time.perf_counter()
-        
+
         try:
             # Check if interruption is enabled and not in cooldown
             if not self._interruption_enabled:
                 logger.debug("🎯 Interruption disabled, ignoring speech during response")
                 return
-                
+
             if current_time - self._last_interruption_time < self._interruption_cooldown:
-                logger.debug(f"🎯 Interruption cooldown active ({current_time - self._last_interruption_time:.1f}s), ignoring")
+                logger.debug(
+                    f"🎯 Interruption cooldown active ({current_time - self._last_interruption_time:.1f}s), ignoring"
+                )
                 return
-            
+
             # Check if confidence meets interruption threshold
             if confidence < self._interruption_threshold:
-                logger.debug(f"🎯 Speech confidence {confidence:.2f} below interruption threshold {self._interruption_threshold}, ignoring")
+                logger.debug(
+                    f"🎯 Speech confidence {confidence:.2f} below interruption threshold {self._interruption_threshold}, ignoring"
+                )
                 return
-            
+
             # Check if we have an active TTS stream to interrupt
             if not self._current_tts_task or self._current_tts_task.done():
                 logger.debug("🎯 No active TTS stream to interrupt")
                 return
-            
+
             # 🚨 INTERRUPTION TRIGGERED!
             logger.info(f"🎯 🚨 INTERRUPTION DETECTED!")
-            logger.info(f"   - Confidence: {confidence:.2f} (threshold: {self._interruption_threshold})")
+            logger.info(
+                f"   - Confidence: {confidence:.2f} (threshold: {self._interruption_threshold})"
+            )
             logger.info(f"   - Energy: {audio_energy:.1f}")
             logger.info(f"   - Chunks sent before interruption: {self._response_chunks_sent}")
-            
+
             # Cancel current TTS streaming
             self._stream_cancelled = True
             if self._current_tts_task:
                 self._current_tts_task.cancel()
                 logger.info("🎯 ✂️ TTS streaming cancelled")
-            
+
             # Update interruption tracking
             self._last_interruption_time = current_time
             self._track_performance_metric("interruptions")
-            
+
             # Calculate interruption latency
             interruption_latency_ms = (time.perf_counter() - interruption_start_time) * 1000
             self._track_performance_metric("interruption_latencies", interruption_latency_ms)
-            
+
             # Send interruption event to client
             if websocket.client_state == WebSocketState.CONNECTED:
-                await websocket.send_json({
-                    "type": "interruption_detected",
-                    "confidence": confidence,
-                    "energy": audio_energy,
-                    "chunks_interrupted": self._response_chunks_sent,
-                    "interruption_latency_ms": interruption_latency_ms,
-                    "conversation_state": self.conversation_state,
-                    "timestamp": datetime.now().isoformat(),
-                })
-            
+                await websocket.send_json(
+                    {
+                        "type": "interruption_detected",
+                        "confidence": confidence,
+                        "energy": audio_energy,
+                        "chunks_interrupted": self._response_chunks_sent,
+                        "interruption_latency_ms": interruption_latency_ms,
+                        "conversation_state": self.conversation_state,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+
             # Reset conversation state to LISTENING (user can now speak)
             self._set_state("LISTENING")
-            
+
             # Reset response tracking
             self._response_chunks_sent = 0
-            
-            logger.info(f"🎯 ✅ Interruption handled in {interruption_latency_ms:.2f}ms - Ready for new input")
-            
+
+            logger.info(
+                f"🎯 ✅ Interruption handled in {interruption_latency_ms:.2f}ms - Ready for new input"
+            )
+
         except Exception as e:
             logger.error(f"🎯 ❌ Error handling interruption: {e}")
             # Don't let interruption errors break the conversation
@@ -1020,17 +1077,17 @@ class AudioSession:
     def configure_interruption_sensitivity(self, threshold: float = 1.5, cooldown: float = 1.0):
         """
         Configure interruption sensitivity parameters.
-        
+
         Args:
             threshold: Confidence threshold for interruption (lower = more sensitive)
             cooldown: Seconds to wait after interruption before allowing another
         """
         old_threshold = self._interruption_threshold
         old_cooldown = self._interruption_cooldown
-        
+
         self._interruption_threshold = max(0.5, min(3.0, threshold))  # Clamp between 0.5-3.0
-        self._interruption_cooldown = max(0.1, min(5.0, cooldown))    # Clamp between 0.1-5.0
-        
+        self._interruption_cooldown = max(0.1, min(5.0, cooldown))  # Clamp between 0.1-5.0
+
         logger.info(f"🎯 Interruption sensitivity updated:")
         logger.info(f"   - Threshold: {old_threshold:.1f} → {self._interruption_threshold:.1f}")
         logger.info(f"   - Cooldown: {old_cooldown:.1f}s → {self._interruption_cooldown:.1f}s")
@@ -1039,10 +1096,12 @@ class AudioSession:
         """Enable or disable interruption detection"""
         old_state = self._interruption_enabled
         self._interruption_enabled = enabled
-        
+
         status = "ENABLED" if enabled else "DISABLED"
-        logger.info(f"🎯 Interruption system {status} (was {'enabled' if old_state else 'disabled'})")
-        
+        logger.info(
+            f"🎯 Interruption system {status} (was {'enabled' if old_state else 'disabled'})"
+        )
+
         return {"interruption_enabled": self._interruption_enabled}
 
     def get_interruption_stats(self) -> dict:
@@ -1053,11 +1112,12 @@ class AudioSession:
             "interruption_cooldown": self._interruption_cooldown,
             "total_interruptions": self._performance_metrics.get("interruptions", 0),
             "interruption_latencies": self._performance_metrics.get("interruption_latencies", []),
-            "has_active_tts": self._current_tts_task is not None and not self._current_tts_task.done(),
+            "has_active_tts": self._current_tts_task is not None
+            and not self._current_tts_task.done(),
             "response_chunks_sent": self._response_chunks_sent,
-            "last_interruption_time": self._last_interruption_time
+            "last_interruption_time": self._last_interruption_time,
         }
-        
+
         # Calculate average interruption latency
         latencies = stats["interruption_latencies"]
         if latencies:
@@ -1068,7 +1128,7 @@ class AudioSession:
             stats["avg_interruption_latency_ms"] = 0
             stats["max_interruption_latency_ms"] = 0
             stats["min_interruption_latency_ms"] = 0
-            
+
         return stats
 
     async def generate_response(self, user_input: str) -> str:
@@ -1123,7 +1183,18 @@ class AudioSession:
             logger.info(f"🎤 Starting WAV TTS synthesis for: '{text[:50]}...'")
 
             # Use direct OpenAI API for WAV output (most reliable approach)
-            return await self._fallback_tts_synthesis(text)
+
+            try:
+                pcm_bytes = await self.tts_service.asynthesize(text)
+                return pcm_to_wav(
+                    pcm_data=pcm_bytes,
+                    sample_rate=24000,
+                    num_channels=1,
+                    bit_depth=16,
+                )
+            except Exception as e:
+                logger.error(f"❌ Error generating welcome audio: {e}")
+                return await self._fallback_tts_synthesis(text)
 
         except Exception as e:
             logger.error(f"❌ WAV TTS synthesis error: {e}")
@@ -1134,7 +1205,6 @@ class AudioSession:
 
             # Return empty bytes as fallback
             return b""
-
 
     async def _fallback_tts_synthesis(self, text: str) -> bytes:
         """Fallback TTS synthesis using direct OpenAI API (22050 Hz WAV for iOS compatibility)"""
@@ -1153,84 +1223,53 @@ class AudioSession:
             )
 
             audio_data = await response.aread()
-            
+
             # 🔍 DETAILED BYTE ANALYSIS
-            logger.info(f"🎵 Fallback TTS generated: {len(audio_data)} bytes")
-            
+
             # Check first 20 bytes to identify format
             first_20_bytes = audio_data[:20] if len(audio_data) >= 20 else audio_data
-            first_20_hex = ' '.join(f'{b:02x}' for b in first_20_bytes)
-            first_20_ascii = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in first_20_bytes)
-            
+            first_20_hex = " ".join(f"{b:02x}" for b in first_20_bytes)
+            first_20_ascii = "".join(chr(b) if 32 <= b <= 126 else "." for b in first_20_bytes)
+
             logger.info(f"🔍 BYTE ANALYSIS: First 20 bytes hex: {first_20_hex}")
             logger.info(f"🔍 BYTE ANALYSIS: First 20 bytes ASCII: {first_20_ascii}")
-            
+
             # Check for common audio format signatures
-            is_wav = len(audio_data) >= 4 and audio_data[:4] == b'RIFF'
-            is_mp3 = len(audio_data) >= 3 and (audio_data[:3] == b'ID3' or (audio_data[0] == 0xFF and (audio_data[1] & 0xE0) == 0xE0))
-            is_aac = len(audio_data) >= 2 and audio_data[:2] == b'\xff\xf1'
-            
+            is_wav = len(audio_data) >= 4 and audio_data[:4] == b"RIFF"
+            is_mp3 = len(audio_data) >= 3 and (
+                audio_data[:3] == b"ID3"
+                or (audio_data[0] == 0xFF and (audio_data[1] & 0xE0) == 0xE0)
+            )
+            is_aac = len(audio_data) >= 2 and audio_data[:2] == b"\xff\xf1"
+
             logger.info(f"🔍 FORMAT DETECTION: WAV={is_wav}, MP3={is_mp3}, AAC={is_aac}")
-            
+
             # If it's WAV, check the header details and convert to 22050 Hz if needed
             if is_wav and len(audio_data) >= 44:
                 try:
                     import struct
+
                     # Parse WAV header
-                    riff, size, wave = struct.unpack('<4sI4s', audio_data[:12])
-                    fmt, fmt_size, audio_format, channels, sample_rate, byte_rate, block_align, bits_per_sample = struct.unpack('<4sIHHIIHH', audio_data[12:36])
-                    
-                    logger.info(f"🔍 WAV HEADER: Sample Rate={sample_rate}, Channels={channels}, Bits={bits_per_sample}, Format={audio_format}")
-                    
-                    # 🎯 DIRECT 22050 Hz CONVERSION: Convert any sample rate to 22050 Hz for iOS compatibility
-                    if sample_rate != 22050:
-                        logger.info(f"🔄 Converting {sample_rate}Hz WAV to iOS-compatible 22050Hz")
-                        try:
-                            import wave
-                            import io
-                            import numpy as np
-                            from scipy import signal
-                            
-                            # Read the original WAV
-                            with io.BytesIO(audio_data) as wav_io:
-                                with wave.open(wav_io, 'rb') as wav_in:
-                                    # Get original parameters
-                                    frames = wav_in.readframes(wav_in.getnframes())
-                                    original_sample_rate = wav_in.getframerate()
-                                    channels = wav_in.getnchannels()
-                                    sample_width = wav_in.getsampwidth()
-                                    
-                                    # Convert to numpy array
-                                    audio_array = np.frombuffer(frames, dtype=np.int16)
-                                    
-                                    # Resample to 22050 Hz (iOS compatible)
-                                    target_sample_rate = 22050
-                                    resampled_audio = signal.resample(audio_array, 
-                                                                     int(len(audio_array) * target_sample_rate / original_sample_rate))
-                                    
-                                    # Convert back to int16
-                                    resampled_audio = (resampled_audio * 32767).astype(np.int16)
-                                    
-                                    # Create new WAV with iOS-compatible format
-                                    with io.BytesIO() as new_wav_io:
-                                        with wave.open(new_wav_io, 'wb') as wav_out:
-                                            wav_out.setnchannels(channels)
-                                            wav_out.setsampwidth(sample_width)
-                                            wav_out.setframerate(target_sample_rate)
-                                            wav_out.writeframes(resampled_audio.tobytes())
-                                        
-                                        audio_data = new_wav_io.getvalue()
-                                        logger.info(f"✅ Successfully converted to iOS-compatible 22050Hz WAV: {len(audio_data)} bytes")
-                                        
-                        except Exception as conversion_error:
-                            logger.error(f"❌ WAV conversion failed: {conversion_error}")
-                            # Fall back to original audio
-                    else:
-                        logger.info(f"✅ WAV already at 22050Hz - iOS compatible")
-                    
+                    riff, size, wave = struct.unpack("<4sI4s", audio_data[:12])
+                    (
+                        fmt,
+                        fmt_size,
+                        audio_format,
+                        channels,
+                        sample_rate,
+                        byte_rate,
+                        block_align,
+                        bits_per_sample,
+                    ) = struct.unpack("<4sIHHIIHH", audio_data[12:36])
+
+                    logger.info(
+                        f"🔍 WAV HEADER: Sample Rate={sample_rate}, Channels={channels}, Bits={bits_per_sample}, Format={audio_format}"
+                    )
+                    audio_data = convert_to_ios_format(audio_data, sample_rate)
+
                 except Exception as e:
                     logger.error(f"🔍 WAV HEADER PARSE ERROR: {e}")
-            
+
             logger.info(f"🎵 Fallback TTS generated: {len(audio_data)} bytes")
             return audio_data
 
@@ -1238,58 +1277,64 @@ class AudioSession:
             logger.error(f"❌ Fallback TTS also failed: {e}")
             return b""
 
-    async def process_conversation_turn(self, websocket: WebSocket, user_input: str, audio_duration_seconds: float = None):
+    async def process_conversation_turn(
+        self, websocket: WebSocket, user_input: str, audio_duration_seconds: float = None
+    ):
         """
         Process a complete conversation turn with zero-impact cost tracking.
-        
+
         This method orchestrates STT → LLM → TTS pipeline while logging cost events
         with fire-and-forget pattern that never blocks voice processing.
         """
         turn_start_time = time.time()
-        
+
         # Initialize timing tracking
         stt_duration_ms = None  # Already completed (from process_audio_chunk)
         llm_duration_ms = None
         tts_duration_ms = None
-        
+
         try:
             # Generate AI response with timing
             llm_start_time = time.time()
             await self.process_and_stream_response(websocket, user_input)
             llm_duration_ms = int((time.time() - llm_start_time) * 1000)
-            
+
             # Calculate total conversation turn latency
             total_latency_ms = int((time.time() - turn_start_time) * 1000)
-            
+
             # 🎯 ZERO-IMPACT COST LOGGING (fire-and-forget, microseconds operation)
-            log_voice_event({
-                'session_id': self.session_id,
-                'user_id': self.user_id,
-                'character': self.character,
-                'timestamp': turn_start_time,
-                'stt_duration_ms': stt_duration_ms,
-                'llm_duration_ms': llm_duration_ms,
-                'tts_duration_ms': tts_duration_ms,
-                'total_latency_ms': total_latency_ms,
-                'transcript_text': user_input,
-                'response_text': None,  # Will be filled by process_and_stream_response
-                'audio_duration_seconds': audio_duration_seconds,
-                'success': True
-            })
-            
+            log_voice_event(
+                {
+                    "session_id": self.session_id,
+                    "user_id": self.user_id,
+                    "character": self.character,
+                    "timestamp": turn_start_time,
+                    "stt_duration_ms": stt_duration_ms,
+                    "llm_duration_ms": llm_duration_ms,
+                    "tts_duration_ms": tts_duration_ms,
+                    "total_latency_ms": total_latency_ms,
+                    "transcript_text": user_input,
+                    "response_text": None,  # Will be filled by process_and_stream_response
+                    "audio_duration_seconds": audio_duration_seconds,
+                    "success": True,
+                }
+            )
+
             # Voice processing complete - cost logging happens in background
-            
+
         except Exception as e:
             # Even errors get logged for cost analysis (fire-and-forget)
-            log_voice_event({
-                'session_id': self.session_id,
-                'user_id': self.user_id,
-                'character': self.character,
-                'timestamp': turn_start_time,
-                'transcript_text': user_input,
-                'success': False,
-                'error_message': str(e)
-            })
+            log_voice_event(
+                {
+                    "session_id": self.session_id,
+                    "user_id": self.user_id,
+                    "character": self.character,
+                    "timestamp": turn_start_time,
+                    "transcript_text": user_input,
+                    "success": False,
+                    "error_message": str(e),
+                }
+            )
             # Re-raise the exception for normal error handling
             raise
 
@@ -1297,12 +1342,12 @@ class AudioSession:
         """Generate AI response and stream audio chunks in real-time"""
         # 🛡️ RELIABILITY: Track websocket for watchdog notifications
         self._current_websocket = websocket
-        
+
         # 🛡️ RELIABILITY: Pre-flight health checks (minimal latency)
         if not self._is_healthy():
             logger.warning(f"⚠️ Session unhealthy, cannot stream response")
             return
-            
+
         try:
             # Check connection state before starting
             if websocket.client_state != WebSocketState.CONNECTED:
@@ -1341,7 +1386,7 @@ class AudioSession:
                 logger.debug(f"🛡️ Starting LLM generation...")
                 response_text = await asyncio.wait_for(
                     self.generate_response(user_input),
-                    timeout=12.0  # Increased to 12s for longer responses (especially during testing)
+                    timeout=12.0,  # Increased to 12s for longer responses (especially during testing)
                 )
                 logger.debug(f"🛡️ LLM generation completed")
             except asyncio.TimeoutError:
@@ -1389,13 +1434,13 @@ class AudioSession:
             # 🎯 NEW APPROACH: Generate all TTS chunks first, then concatenate
             logger.info(f"🎤 Starting TTS generation for {len(chunks)} chunks")
             tts_start_time = time.time()
-            
+
             # Generate all TTS chunks in parallel for better performance
             tts_tasks = []
             for i, chunk in enumerate(chunks):
                 task = asyncio.create_task(self.synthesize_speech_chunk(chunk))
                 tts_tasks.append((i, chunk, task))
-            
+
             # Wait for all TTS chunks to complete
             audio_chunks = []
             for i, chunk_text, task in tts_tasks:
@@ -1403,18 +1448,22 @@ class AudioSession:
                     audio_data = await task
                     if audio_data:
                         audio_chunks.append((i, audio_data))
-                        logger.info(f"🎵 Generated TTS chunk {i+1}/{len(chunks)}: {len(audio_data)} bytes")
+                        logger.info(
+                            f"🎵 Generated TTS chunk {i+1}/{len(chunks)}: {len(audio_data)} bytes"
+                        )
                     else:
                         logger.warning(f"⚠️ TTS chunk {i+1} returned empty audio")
                 except Exception as e:
                     logger.error(f"❌ TTS chunk {i+1} failed: {e}")
-            
+
             # Sort chunks by original order
             audio_chunks.sort(key=lambda x: x[0])
             audio_chunks = [chunk[1] for chunk in audio_chunks]
-            
+
             tts_duration = time.time() - tts_start_time
-            logger.info(f"🎤 TTS generation completed: {len(audio_chunks)} chunks in {tts_duration:.2f}s")
+            logger.info(
+                f"🎤 TTS generation completed: {len(audio_chunks)} chunks in {tts_duration:.2f}s"
+            )
 
             if not audio_chunks:
                 logger.error("❌ No audio chunks generated")
@@ -1424,7 +1473,7 @@ class AudioSession:
             # 🎯 CONCATENATE: Merge all audio chunks into one continuous stream
             logger.info(f"🔄 Concatenating {len(audio_chunks)} audio chunks into single stream")
             concatenated_audio = await self._concatenate_audio_chunks(audio_chunks)
-            
+
             if not concatenated_audio:
                 logger.error("❌ Audio concatenation failed")
                 self._force_reset_state("LISTENING", "concatenation_failed")
@@ -1437,23 +1486,28 @@ class AudioSession:
                 try:
                     # Send as base64-encoded audio data
                     import base64
-                    audio_base64 = base64.b64encode(concatenated_audio).decode('utf-8')
-                    
-                    await websocket.send_json({
-                        "type": "audio_stream",
+
+                    audio_base64 = base64.b64encode(concatenated_audio).decode("utf-8")
+
+                    await websocket.send_json(
+                        {
+                            "type": "audio_stream",
                             "character": self.character,
-                        "audio_data": audio_base64,
-                        "audio_size_bytes": len(concatenated_audio),
-                        "audio_size_base64": len(audio_base64),
-                        "chunk_count": len(chunks),
-                        "is_concatenated": True,
-                        "conversation_state": self.conversation_state,
-                        "conversation_turn": self.conversation_turn_count,
+                            "audio_data": audio_base64,
+                            "audio_size_bytes": len(concatenated_audio),
+                            "audio_size_base64": len(audio_base64),
+                            "chunk_count": len(chunks),
+                            "is_concatenated": True,
+                            "conversation_state": self.conversation_state,
+                            "conversation_turn": self.conversation_turn_count,
                             "timestamp": datetime.now().isoformat(),
-                    })
-                    
-                    logger.info(f"🎵 Sent concatenated audio stream: {len(concatenated_audio)} bytes, {len(audio_base64)} base64 chars")
-                    
+                        }
+                    )
+
+                    logger.info(
+                        f"🎵 Sent concatenated audio stream: {len(concatenated_audio)} bytes, {len(audio_base64)} base64 chars"
+                    )
+
                 except Exception as send_error:
                     logger.error(f"❌ Failed to send concatenated audio: {send_error}")
                     self._force_reset_state("LISTENING", f"send_error: {send_error}")
@@ -1476,11 +1530,14 @@ class AudioSession:
 
             logger.info(f"🎯 Concatenated audio streaming completed")
             self._set_state("LISTENING")
-            logger.info(f"🔄 Response complete - Back to LISTENING state (Turn #{self.conversation_turn_count})")
+            logger.info(
+                f"🔄 Response complete - Back to LISTENING state (Turn #{self.conversation_turn_count})"
+            )
 
         except Exception as e:
             logger.error(f"❌ Error in process_and_stream_response: {e}")
             import traceback
+
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
             self._force_reset_state("LISTENING", f"stream_error: {e}")
 
@@ -1488,28 +1545,28 @@ class AudioSession:
         """Concatenate multiple WAV audio chunks into one continuous WAV stream"""
         if not audio_chunks:
             return b""
-        
+
         if len(audio_chunks) == 1:
             return audio_chunks[0]
-        
+
         try:
-            import wave
             import io
             import struct
-            
+            import wave
+
             logger.info(f"🔄 Concatenating {len(audio_chunks)} WAV chunks")
-            
+
             # Extract audio data from each WAV chunk (remove headers)
             audio_data_chunks = []
             total_samples = 0
             sample_rate = None
             channels = None
             sample_width = None
-            
+
             for i, wav_data in enumerate(audio_chunks):
                 try:
                     with io.BytesIO(wav_data) as wav_io:
-                        with wave.open(wav_io, 'rb') as wav_in:
+                        with wave.open(wav_io, "rb") as wav_in:
                             # Get WAV parameters (should be same for all chunks)
                             if sample_rate is None:
                                 sample_rate = wav_in.getframerate()
@@ -1517,47 +1574,56 @@ class AudioSession:
                                 sample_width = wav_in.getsampwidth()
                             else:
                                 # Verify all chunks have same parameters
-                                if (wav_in.getframerate() != sample_rate or 
-                                    wav_in.getnchannels() != channels or 
-                                    wav_in.getsampwidth() != sample_width):
+                                if (
+                                    wav_in.getframerate() != sample_rate
+                                    or wav_in.getnchannels() != channels
+                                    or wav_in.getsampwidth() != sample_width
+                                ):
                                     logger.warning(f"⚠️ WAV chunk {i} has different parameters")
-                            
+
                             # Read audio data (skip header)
                             frames = wav_in.readframes(wav_in.getnframes())
                             audio_data_chunks.append(frames)
                             total_samples += wav_in.getnframes()
-                            
-                            logger.debug(f"🔄 Chunk {i+1}: {wav_in.getnframes()} frames, {len(frames)} bytes")
-                            
+
+                            logger.debug(
+                                f"🔄 Chunk {i+1}: {wav_in.getnframes()} frames, {len(frames)} bytes"
+                            )
+
                 except Exception as e:
                     logger.error(f"❌ Failed to process WAV chunk {i}: {e}")
                     continue
-            
+
             if not audio_data_chunks:
                 logger.error("❌ No valid audio data chunks found")
                 return b""
-            
+
             # Concatenate all audio data
-            concatenated_audio_data = b''.join(audio_data_chunks)
-            
+            concatenated_audio_data = b"".join(audio_data_chunks)
+
             # Create new WAV file with concatenated data
             with io.BytesIO() as new_wav_io:
-                with wave.open(new_wav_io, 'wb') as wav_out:
+                with wave.open(new_wav_io, "wb") as wav_out:
                     wav_out.setnchannels(channels)
                     wav_out.setsampwidth(sample_width)
                     wav_out.setframerate(sample_rate)
                     wav_out.writeframes(concatenated_audio_data)
-                
+
                 concatenated_wav = new_wav_io.getvalue()
-                
-                logger.info(f"✅ Concatenated {len(audio_chunks)} chunks: {total_samples} total frames, {len(concatenated_wav)} bytes")
-                logger.info(f"✅ Final WAV: {sample_rate}Hz, {channels} channels, {sample_width*8} bits")
-                
+
+                logger.info(
+                    f"✅ Concatenated {len(audio_chunks)} chunks: {total_samples} total frames, {len(concatenated_wav)} bytes"
+                )
+                logger.info(
+                    f"✅ Final WAV: {sample_rate}Hz, {channels} channels, {sample_width*8} bits"
+                )
+
                 return concatenated_wav
-                
+
         except Exception as e:
             logger.error(f"❌ Audio concatenation failed: {e}")
             import traceback
+
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
             return b""
 
@@ -1566,10 +1632,10 @@ class AudioSession:
         # 🛡️ RELIABILITY: Ensure we're in safe state
         if self.conversation_state != "LISTENING":
             self._set_state("LISTENING")
-            
+
         # 🛡️ ASYNC CLEANUP: Schedule the actual cleanup work (zero latency)
         self._schedule_cleanup("turn_reset")
-        
+
         logger.debug(f"🔄 Session {self.session_id} reset scheduled for next conversation turn")
 
     def is_session_active(self) -> bool:
@@ -1612,7 +1678,7 @@ class AudioSession:
             # Shutdown services
             if self.stt_service:
                 await self.stt_service.shutdown()
-                
+
             logger.info(
                 f"🧹 Session {self.session_id} cleaned up (had {self.conversation_turn_count} turns)"
             )
@@ -1623,27 +1689,27 @@ class AudioSession:
         """Track performance metrics for VAD decoupling and interruption monitoring"""
         try:
             if metric_type == "chunk_processed":
-                self._performance_metrics['chunk_count'] += 1
+                self._performance_metrics["chunk_count"] += 1
             elif metric_type == "speech_detected":
-                self._performance_metrics['speech_detections'] += 1
+                self._performance_metrics["speech_detections"] += 1
             elif metric_type == "transcription_attempted":
-                self._performance_metrics['transcription_attempts'] += 1
+                self._performance_metrics["transcription_attempts"] += 1
             elif metric_type == "interruptions":
-                self._performance_metrics['interruptions'] += 1
+                self._performance_metrics["interruptions"] += 1
             elif metric_type == "vad_processing_time" and value is not None:
-                times = self._performance_metrics['vad_processing_times']
+                times = self._performance_metrics["vad_processing_times"]
                 times.append(value)
                 # Keep only last 100 measurements
                 if len(times) > 100:
                     times.pop(0)
             elif metric_type == "full_processing_time" and value is not None:
-                times = self._performance_metrics['full_processing_times']
+                times = self._performance_metrics["full_processing_times"]
                 times.append(value)
                 # Keep only last 100 measurements
                 if len(times) > 100:
                     times.pop(0)
             elif metric_type == "interruption_latencies" and value is not None:
-                latencies = self._performance_metrics['interruption_latencies']
+                latencies = self._performance_metrics["interruption_latencies"]
                 latencies.append(value)
                 # Keep only last 50 measurements
                 if len(latencies) > 50:
@@ -1655,48 +1721,56 @@ class AudioSession:
         """Get performance summary for VAD decoupling validation"""
         try:
             metrics = self._performance_metrics
-            
-            vad_times = metrics['vad_processing_times']
-            full_times = metrics['full_processing_times']
-            
-            interruption_latencies = metrics['interruption_latencies']
-            
+
+            vad_times = metrics["vad_processing_times"]
+            full_times = metrics["full_processing_times"]
+
+            interruption_latencies = metrics["interruption_latencies"]
+
             summary = {
-                'session_id': self.session_id,
-                'chunks_processed': metrics['chunk_count'],
-                'speech_detections': metrics['speech_detections'],
-                'transcription_attempts': metrics['transcription_attempts'],
-                'interruptions': metrics['interruptions'],
-                'vad_performance': {
-                    'count': len(vad_times),
-                    'avg_ms': sum(vad_times) / len(vad_times) if vad_times else 0,
-                    'max_ms': max(vad_times) if vad_times else 0,
-                    'target_met': all(t < 10.0 for t in vad_times) if vad_times else True
+                "session_id": self.session_id,
+                "chunks_processed": metrics["chunk_count"],
+                "speech_detections": metrics["speech_detections"],
+                "transcription_attempts": metrics["transcription_attempts"],
+                "interruptions": metrics["interruptions"],
+                "vad_performance": {
+                    "count": len(vad_times),
+                    "avg_ms": sum(vad_times) / len(vad_times) if vad_times else 0,
+                    "max_ms": max(vad_times) if vad_times else 0,
+                    "target_met": all(t < 10.0 for t in vad_times) if vad_times else True,
                 },
-                'full_processing_performance': {
-                    'count': len(full_times),
-                    'avg_ms': sum(full_times) / len(full_times) if full_times else 0,
-                    'max_ms': max(full_times) if full_times else 0,
-                    'target_met': all(t < 50.0 for t in full_times) if full_times else True
+                "full_processing_performance": {
+                    "count": len(full_times),
+                    "avg_ms": sum(full_times) / len(full_times) if full_times else 0,
+                    "max_ms": max(full_times) if full_times else 0,
+                    "target_met": all(t < 50.0 for t in full_times) if full_times else True,
                 },
-                'interruption_performance': {
-                    'total_interruptions': metrics['interruptions'],
-                    'avg_latency_ms': sum(interruption_latencies) / len(interruption_latencies) if interruption_latencies else 0,
-                    'max_latency_ms': max(interruption_latencies) if interruption_latencies else 0,
-                    'min_latency_ms': min(interruption_latencies) if interruption_latencies else 0,
-                    'target_met': all(t < 50.0 for t in interruption_latencies) if interruption_latencies else True,  # Target <50ms
-                    'enabled': self._interruption_enabled,
-                    'threshold': self._interruption_threshold,
-                    'cooldown': self._interruption_cooldown
+                "interruption_performance": {
+                    "total_interruptions": metrics["interruptions"],
+                    "avg_latency_ms": (
+                        sum(interruption_latencies) / len(interruption_latencies)
+                        if interruption_latencies
+                        else 0
+                    ),
+                    "max_latency_ms": max(interruption_latencies) if interruption_latencies else 0,
+                    "min_latency_ms": min(interruption_latencies) if interruption_latencies else 0,
+                    "target_met": (
+                        all(t < 50.0 for t in interruption_latencies)
+                        if interruption_latencies
+                        else True
+                    ),  # Target <50ms
+                    "enabled": self._interruption_enabled,
+                    "threshold": self._interruption_threshold,
+                    "cooldown": self._interruption_cooldown,
                 },
-                'conversation_state': self.conversation_state,
-                'session_active': self.session_active
+                "conversation_state": self.conversation_state,
+                "session_active": self.session_active,
             }
-            
+
             return summary
         except Exception as e:
             logger.warning(f"Error generating performance summary: {e}")
-            return {'error': str(e)}
+            return {"error": str(e)}
 
 
 # Global session manager
@@ -1743,29 +1817,42 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                 elif "bytes" in data:
                     # Handle binary audio data - ALWAYS process for VAD and interruption detection
                     audio_data = data["bytes"]
-                    
+
                     # 🔍 VALIDATION: Check if receiving PCM vs WAV
                     first_bytes = audio_data[:100] if len(audio_data) >= 100 else audio_data
-                    first_bytes_hex = ' '.join(f'{b:02x}' for b in first_bytes[:20])  # First 20 bytes as hex
-                    first_bytes_ascii = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in first_bytes[:20])  # ASCII representation
-                    
+                    first_bytes_hex = " ".join(
+                        f"{b:02x}" for b in first_bytes[:20]
+                    )  # First 20 bytes as hex
+                    first_bytes_ascii = "".join(
+                        chr(b) if 32 <= b <= 126 else "." for b in first_bytes[:20]
+                    )  # ASCII representation
+
                     # Check for WAV header signature
-                    is_wav = len(audio_data) >= 4 and audio_data[:4] == b'RIFF'
-                    
-                    logger.info(f"🎯 AUDIO RECEIVED: {len(audio_data)} bytes, session={session is not None}")
-                    logger.info(f"🔍 VALIDATION: First 20 bytes hex: {first_bytes_hex}")
-                    logger.info(f"🔍 VALIDATION: First 20 bytes ASCII: {first_bytes_ascii}")
-                    logger.info(f"🔍 VALIDATION: Is WAV header: {is_wav} (should be False for raw PCM)")
-                    
-                    if session:
-                        logger.info(f"🎯 SESSION STATE: active={session.session_active}, conversation_state={session.conversation_state}, stt_service={session.stt_service is not None}")
-                    
+                    is_wav = len(audio_data) >= 4 and audio_data[:4] == b"RIFF"
+
+                    # logger.info(
+                    #     f"🎯 AUDIO RECEIVED: {len(audio_data)} bytes, session={session is not None}"
+                    # )
+                    # logger.info(f"🔍 VALIDATION: First 20 bytes hex: {first_bytes_hex}")
+                    # logger.info(f"🔍 VALIDATION: First 20 bytes ASCII: {first_bytes_ascii}")
+                    # logger.info(
+                    #     f"🔍 VALIDATION: Is WAV header: {is_wav} (should be False for raw PCM)"
+                    # )
+
+                    # if session:
+                    #     logger.info(
+                    #         f"🎯 SESSION STATE: active={session.session_active}, conversation_state={session.conversation_state}, stt_service={session.stt_service is not None}"
+                    #     )
+
                     if session and session.stt_service:
-                        logger.info(f"🎯 PROCESSING AUDIO: {len(audio_data)} bytes in {session.conversation_state} state")
-                        
+                        # logger.info(
+                        #     f"🎯 PROCESSING AUDIO: {len(audio_data)} bytes in {session.conversation_state} state"
+                        # )
+
                         # Calculate audio duration for cost tracking (16kHz, 16-bit, mono)
-                        audio_duration_seconds = len(audio_data) / (16000 * 2)  # 2 bytes per sample
-                        
+                        # TEMP: 48000 when testing otherwise 16000
+                        audio_duration_seconds = len(audio_data) / (48000 * 2)  # 2 bytes per sample
+
                         # 🎯 INTERRUPTION SYSTEM: Always process audio for VAD regardless of session_active
                         # This enables interruption detection during RESPONDING state
                         transcription = await session.process_audio_chunk(audio_data, websocket)
@@ -1773,7 +1860,9 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                         # Only process conversation turns if session is active and we got transcription
                         if transcription and session.session_active:
                             # Process complete conversation turn with zero-impact cost tracking
-                            await session.process_conversation_turn(websocket, transcription, audio_duration_seconds)
+                            await session.process_conversation_turn(
+                                websocket, transcription, audio_duration_seconds
+                            )
                             # Reset for next conversation turn (but keep session alive)
                             session.reset_for_next_turn()
 
@@ -1836,7 +1925,9 @@ async def handle_json_message(
                 return session
 
             # Create and initialize session (with cost tracking)
-            user_id = message.get("user_id", f"user_{session_id[:8]}")  # Allow user_id from client or generate one
+            user_id = message.get(
+                "user_id", f"user_{session_id[:8]}"
+            )  # Allow user_id from client or generate one
             session = AudioSession(session_id, character, user_id)
             await session.initialize()
             active_sessions[session_id] = session
@@ -1854,20 +1945,35 @@ async def handle_json_message(
             )
 
             # Send welcome message from character
-            character_obj = CharacterFactory.create_character(character)
+            # character_obj = CharacterFactory.create_character(character)
             welcome_message = f"Hello! I'm {character.title()}. I'm here to listen and support you. How are you feeling today?"
 
             # Generate WAV audio for welcome message
+            # TODO: Move error handling and calling of tts to a different function somewhere else. It should just return the pcm bytes or empty
+            # TODO: Detect requests from ios vs web to output valid format
             try:
-                welcome_audio = await session._fallback_tts_synthesis(welcome_message)
-                if welcome_audio:
-                    welcome_base64 = base64.b64encode(welcome_audio).decode("utf-8")
-                    logger.info(f"🎵 Generated welcome WAV: {len(welcome_audio)} bytes, {len(welcome_base64)} base64 chars")
-                else:
-                    logger.warning("⚠️ Failed to generate welcome audio, sending text only")
-                    welcome_base64 = ""
+                pcm_bytes = await session.tts_service.asynthesize(welcome_message)
+                sample_rate = 24000
+
+                welcome_audio = pcm_to_wav(
+                    pcm_data=pcm_bytes,
+                    sample_rate=sample_rate,
+                    num_channels=1,
+                    bit_depth=16,
+                )
+                welcome_audio_ios = convert_to_ios_format(welcome_audio, sample_rate)
+
             except Exception as e:
                 logger.error(f"❌ Error generating welcome audio: {e}")
+                welcome_audio_ios = await session._fallback_tts_synthesis(welcome_message)
+
+            if welcome_audio_ios:
+                welcome_base64 = base64.b64encode(welcome_audio_ios).decode("utf-8")
+                logger.info(
+                    f"🎵 Generated welcome WAV: {len(welcome_audio_ios)} bytes, {len(welcome_base64)} base64 chars"
+                )
+            else:
+                logger.warning("⚠️ Failed to generate welcome audio, sending text only")
                 welcome_base64 = ""
 
             # Send welcome as first response (but don't count as conversation turn)
@@ -1952,33 +2058,35 @@ async def handle_json_message(
                 threshold = message.get("threshold", 1.5)
                 cooldown = message.get("cooldown", 1.0)
                 session.configure_interruption_sensitivity(threshold, cooldown)
-                
-                await websocket.send_json({
-                    "type": "interruption_configured",
-                    "threshold": session._interruption_threshold,
-                    "cooldown": session._interruption_cooldown,
-                    "timestamp": datetime.now().isoformat()
-                })
+
+                await websocket.send_json(
+                    {
+                        "type": "interruption_configured",
+                        "threshold": session._interruption_threshold,
+                        "cooldown": session._interruption_cooldown,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
 
         elif message_type == "enable_interruption":
             if session:
                 enabled = message.get("enabled", True)
                 result = session.enable_interruptions(enabled)
-                
-                await websocket.send_json({
-                    "type": "interruption_toggled",
-                    **result,
-                    "timestamp": datetime.now().isoformat()
-                })
+
+                await websocket.send_json(
+                    {
+                        "type": "interruption_toggled",
+                        **result,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
 
         elif message_type == "get_interruption_stats":
             if session:
                 stats = session.get_interruption_stats()
-                await websocket.send_json({
-                    "type": "interruption_stats",
-                    **stats,
-                    "timestamp": datetime.now().isoformat()
-                })
+                await websocket.send_json(
+                    {"type": "interruption_stats", **stats, "timestamp": datetime.now().isoformat()}
+                )
 
         # 🎯 ADAPTIVE BUFFERING SYSTEM: Configuration and monitoring
         elif message_type == "configure_adaptive_buffering":
@@ -1989,33 +2097,39 @@ async def handle_json_message(
                     long_thought_threshold=message.get("long_thought_threshold"),
                     max_buffer_size=message.get("max_buffer_size"),
                     silence_detection_ms=message.get("silence_detection_ms"),
-                    min_speech_duration_ms=message.get("min_speech_duration_ms")
+                    min_speech_duration_ms=message.get("min_speech_duration_ms"),
                 )
-                
-                await websocket.send_json({
-                    "type": "adaptive_buffering_configured",
-                    "config": config,
-                    "timestamp": datetime.now().isoformat()
-                })
+
+                await websocket.send_json(
+                    {
+                        "type": "adaptive_buffering_configured",
+                        "config": config,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
 
         elif message_type == "get_adaptive_buffer_stats":
             if session:
                 stats = session.get_adaptive_buffer_stats()
-                await websocket.send_json({
-                    "type": "adaptive_buffer_stats",
-                    **stats,
-                    "timestamp": datetime.now().isoformat()
-                })
+                await websocket.send_json(
+                    {
+                        "type": "adaptive_buffer_stats",
+                        **stats,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
 
         elif message_type == "get_performance_summary":
             if session:
                 summary = session.get_performance_summary()
-                
-                await websocket.send_json({
-                    "type": "performance_summary",
-                    **summary,
-                    "timestamp": datetime.now().isoformat()
-                })
+
+                await websocket.send_json(
+                    {
+                        "type": "performance_summary",
+                        **summary,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
 
     except Exception as e:
         logger.error(f"❌ Error handling JSON message: {e}")

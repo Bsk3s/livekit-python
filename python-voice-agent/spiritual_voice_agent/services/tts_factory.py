@@ -46,6 +46,8 @@ class TTSFactory:
                 return TTSFactory._create_elevenlabs_tts(character)
             elif model == "wav":
                 return TTSFactory._create_wav_tts(character)
+            elif model == "kokoro":
+                return TTSFactory._create_kokoro_tts(character)
             else:
                 logger.warning(f"⚠️ Unknown TTS model: {model}, falling back to MP3")
                 return TTSFactory._create_wav_tts(character)
@@ -122,6 +124,14 @@ class TTSFactory:
 
         logger.info(f"✅ Creating WAV TTS for {character}")
         return create_wav_tts(character)
+
+    @staticmethod
+    def _create_kokoro_tts(character: str) -> tts.TTS:
+        """Create kokoro TTS service"""
+        from .custom_tts_service import create_kokoro_tts
+
+        logger.info(f"✅ Creating WAV TTS with Kokoro")
+        return create_kokoro_tts(character)
 
 
 # 🎯 TESTING UTILITIES

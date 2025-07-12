@@ -5,12 +5,15 @@ Easy-to-modify template for plugging in your own TTS model
 """
 
 import asyncio
+import io
 import logging
 from typing import AsyncGenerator, Optional
 
 import numpy as np
 from livekit import rtc
 from livekit.agents import tts
+
+from spiritual_voice_agent.services.tts.implementations.kokoro.kokoro import KokoroTTS
 
 logger = logging.getLogger(__name__)
 
@@ -24,24 +27,22 @@ class WAVTTSService(tts.TTS):
     def __init__(self, character: str = "adina"):
         """Initialize WAV TTS service"""
         super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=True
-            ),
+            capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=16000,  # Standard sample rate for voice
-            num_channels=1      # Mono audio
+            num_channels=1,  # Mono audio
         )
-        
+
         self.character = character
-        
+
         # Character-specific voice mapping
         voice_map = {
             "adina": "nova",  # Warm, feminine
             "raffa": "onyx",  # Deep, masculine
             "default": "alloy",  # Neutral
         }
-        
+
         self.voice = voice_map.get(character.lower(), "alloy")
-        
+
         logger.info(f"🎙️ WAV TTS initialized for character: {character} (voice: {self.voice})")
 
     async def synthesize(self, text: str) -> "tts.ChunkedStream":
@@ -53,7 +54,7 @@ class WAVTTSService(tts.TTS):
         try:
             # Use direct OpenAI API for WAV output (iOS compatible)
             import openai
-            
+
             response = await openai.AsyncOpenAI().audio.speech.create(
                 model="tts-1",
                 voice=self.voice,
@@ -63,10 +64,10 @@ class WAVTTSService(tts.TTS):
 
             audio_data = await response.aread()
             logger.info(f"🎵 WAV TTS generated: {len(audio_data)} bytes")
-            
+
             # Store the WAV data for retrieval
             self._last_wav_data = audio_data
-            
+
             # Return a simple stream that yields the WAV data
             return tts.ChunkedStream(self._wav_to_audio_frames(audio_data))
 
@@ -77,24 +78,24 @@ class WAVTTSService(tts.TTS):
 
     def _wav_to_audio_frames(self, wav_data: bytes) -> AsyncGenerator[rtc.AudioFrame, None]:
         """Convert WAV data to LiveKit audio frames"""
-        
+
         async def frame_generator():
             # Store the WAV data for external access
             self._last_wav_data = wav_data
-            
+
             # Create a simple audio frame that represents the WAV data
             # This is a placeholder - the actual WAV data is stored in _last_wav_data
             dummy_audio = np.zeros(1600, dtype=np.int16)  # 100ms at 16kHz
-            
+
             frame = rtc.AudioFrame(
                 data=dummy_audio,
                 sample_rate=16000,
                 num_channels=1,
                 samples_per_channel=len(dummy_audio),
             )
-            
+
             yield frame
-            
+
             # Small delay for natural streaming
             await asyncio.sleep(0.01)
 
@@ -102,7 +103,7 @@ class WAVTTSService(tts.TTS):
 
     def get_last_wav_data(self) -> bytes:
         """Get the last generated WAV data"""
-        return getattr(self, '_last_wav_data', b'')
+        return getattr(self, "_last_wav_data", b"")
 
     def _create_silence_stream(self) -> AsyncGenerator[rtc.AudioFrame, None]:
         """Create silence stream for error fallback"""
@@ -272,3 +273,12 @@ def create_custom_tts(character: str = "default") -> CustomTTSService:
 def create_wav_tts(character: str = "default") -> WAVTTSService:
     """Factory function to create WAV TTS service"""
     return WAVTTSService(character)
+
+
+def create_kokoro_tts(character: str = "default"):
+    """Factory function to create WAV TTS service"""
+    voice_mapping = {
+        "adina": "af_heart",
+        "rafa": "am_fenrir",
+    }
+    return KokoroTTS(voice_mapping[character])

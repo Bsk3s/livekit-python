@@ -123,6 +123,7 @@ async def create_token_legacy(request: dict):
 async def generate_token_expo(request: dict):
     """Generate token endpoint for Expo mobile app"""
     try:
+        print("HERE")
         # Extract data from the request format sent by the iOS app
         room = request.get("room", "spiritual-room-adina")
         identity = request.get("identity", "anonymous")
