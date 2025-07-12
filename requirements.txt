@@ -1,5 +1,5 @@
 # Core LiveKit dependencies
-livekit-agents[openai,silero]
+# livekit-agents[openai,silero]
 livekit-plugins-openai
 livekit-plugins-silero
 
@@ -13,3 +13,10 @@ logging
 
 # HTTP client (for API calls)
 httpx 
+
+soundfile
+torch
+torchvision
+torchaudio
+kokoro-onnx
+python-dotenv
