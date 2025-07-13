@@ -22,17 +22,21 @@ def convert_to_ios_format(audio_data, sample_rate):
                     channels = wav_in.getnchannels()
                     sample_width = wav_in.getsampwidth()
 
-                    # Convert to numpy array
+                    # Convert to numpy array (int16)
                     audio_array = np.frombuffer(frames, dtype=np.int16)
-
+                    
+                    # 🔧 FIX: Convert to float32 for proper resampling (normalize to [-1.0, +1.0])
+                    audio_float = audio_array.astype(np.float32) / 32768.0
+                    
                     # Resample to 22050 Hz (iOS compatible)
                     target_sample_rate = 22050
                     resampled_audio = signal.resample(
-                        audio_array,
-                        int(len(audio_array) * target_sample_rate / original_sample_rate),
+                        audio_float,
+                        int(len(audio_float) * target_sample_rate / original_sample_rate),
                     )
-
-                    # Convert back to int16
+                    
+                    # 🔧 FIX: Convert back to int16 with proper scaling and clipping prevention
+                    resampled_audio = np.clip(resampled_audio, -1.0, 1.0)  # Prevent clipping
                     resampled_audio = (resampled_audio * 32767).astype(np.int16)
 
                     # Create new WAV with iOS-compatible format
@@ -50,5 +54,7 @@ def convert_to_ios_format(audio_data, sample_rate):
 
         except Exception as conversion_error:
             logger.error(f"❌ WAV conversion failed: {conversion_error}")
-        else:
-            logger.info(f"✅ WAV already at 22050Hz - iOS compatible")
+            return audio_data
+    else:
+        logger.info(f"✅ WAV already at 22050Hz - iOS compatible")
+        return audio_data
