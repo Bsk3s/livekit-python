@@ -37,6 +37,7 @@ livekit-api==1.0.3
 livekit-plugins-deepgram==1.1.5
 livekit-plugins-openai==1.1.5
 livekit-plugins-silero==1.1.5
+livekit-plugins-turn-detector==1.1.5
 livekit-protocol==1.0.4
 marshmallow==3.26.1
 mpmath==1.3.0

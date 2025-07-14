@@ -15,13 +15,14 @@ class OpenAILLMService(BaseLLMService):
         self._initialized = False
 
     def _validate_config(self) -> None:
-        if not os.getenv("OPENAI_API_KEY"):
-            raise ValueError("OPENAI_API_KEY environment variable is not set")
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set or empty")
 
     async def initialize(self) -> None:
         if not self._initialized:
             self._client = openai.AsyncOpenAI(
-                api_key=os.getenv("OPENAI_API_KEY"),
+                api_key=os.getenv("OPENAI_API_KEY", "").strip(),
                 base_url=self.config.get("base_url"),
                 timeout=self.config.get("timeout", 30.0),
             )

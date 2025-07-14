@@ -28,14 +28,11 @@ class DirectDeepgramSTTService(BaseSTTService):
 
     def _validate_config(self) -> None:
         """Validate required configuration and environment variables"""
-        api_key = os.getenv("DEEPGRAM_API_KEY")
+        api_key = os.getenv("DEEPGRAM_API_KEY", "").strip()
         if not api_key:
-            raise ValueError("DEEPGRAM_API_KEY environment variable is not set")
+            raise ValueError("DEEPGRAM_API_KEY environment variable is not set or empty")
 
-        if not api_key.strip():
-            raise ValueError("DEEPGRAM_API_KEY is empty or whitespace")
-
-        self._api_key = api_key.strip()
+        self._api_key = api_key
         logger.info(f"🔑 Deepgram API key validated: {self._api_key[:8]}...")
 
     async def initialize(self) -> None:

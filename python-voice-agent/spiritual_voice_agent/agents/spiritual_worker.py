@@ -18,6 +18,7 @@ from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, llm, stt, tts
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import deepgram, openai, silero
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # CRITICAL: Sanitize environment variables to fix API key issues
 # Remove any trailing whitespace/newlines that cause "illegal header value" errors
@@ -44,9 +45,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Turn detector removed - using stable VAD-based detection only
-TURN_DETECTOR_AVAILABLE = False
-logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)")
+# Turn detector - using new AI-powered MultilingualModel
+TURN_DETECTOR_AVAILABLE = True
+logger.info("🚀 Using AI-powered turn detection (MultilingualModel enabled)")
 
 from spiritual_voice_agent.characters.character_factory import CharacterFactory
 
@@ -176,6 +177,9 @@ class SpiritualAgentWorker:
                         min_speech_duration=0.02,  # Quick speech detection
                         min_silence_duration=0.05,  # Fast silence detection
                     ),
+                    turn_detector=MultilingualModel(
+                        unlikely_threshold=0.5,  # Sensitivity for turn detection
+                    ),
                     stt=stt_service,
                     llm=llm_service,
                     tts=tts_service,  # ElevenLabs or OpenAI TTS
@@ -186,6 +190,7 @@ class SpiritualAgentWorker:
                 )
                 logger.info("✅ Real-time session created with streaming TTS")
                 logger.info("🔗 TTS service properly wired into AgentSession pipeline")
+                logger.info("🚀 AI-powered turn detection enabled (MultilingualModel)")
 
                 # Log final configuration
                 from spiritual_voice_agent.services.tts_factory import get_tts_config
@@ -196,6 +201,7 @@ class SpiritualAgentWorker:
                 )
                 logger.info(f"   🎧 STT: Deepgram STT")
                 logger.info(f"   🧠 LLM: GPT-4o Mini (optimized)")
+                logger.info(f"   🚀 Turn Detection: AI-powered (MultilingualModel)")
                 logger.info(f"   ⚡ Target: Natural voice with streaming")
 
             except Exception as e:
@@ -205,12 +211,16 @@ class SpiritualAgentWorker:
                 try:
                     session = AgentSession(
                         vad=silero.VAD.load(),
+                        turn_detector=MultilingualModel(
+                            unlikely_threshold=0.5,  # Sensitivity for turn detection
+                        ),
                         stt=stt_service,
                         llm=llm_service,
                         tts=tts_service,
                         allow_interruptions=True,
                     )
                     logger.info("✅ Basic agent session created with TTS service")
+                    logger.info("🚀 AI-powered turn detection enabled (MultilingualModel)")
                 except Exception as fallback_e:
                     logger.error(f"❌ Basic agent session also failed: {fallback_e}")
                     raise

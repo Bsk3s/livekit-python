@@ -26,7 +26,7 @@ def start_token_api():
         from spiritual_voice_agent.main import app
 
         # Get port from environment (Render sets this)
-        port = int(os.getenv("PORT", 8000))
+        port = int(os.getenv("PORT", 10000))
 
         # Use Python module approach to run uvicorn
         import subprocess

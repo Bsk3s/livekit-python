@@ -15,8 +15,9 @@ class DeepgramSTTService(BaseSTTService):
         self._initialized = False
 
     def _validate_config(self) -> None:
-        if not os.getenv("DEEPGRAM_API_KEY"):
-            raise ValueError("DEEPGRAM_API_KEY environment variable is not set")
+        api_key = os.getenv("DEEPGRAM_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("DEEPGRAM_API_KEY environment variable is not set or empty")
 
     async def initialize(self) -> None:
         if not self._initialized:
