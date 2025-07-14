@@ -28,35 +28,30 @@ dependencies = [
     "pydantic>=2.0.0",
     
     # LiveKit SDK and Agents
-    "livekit-agents[deepgram,openai,silero]",
-    "livekit-plugins-deepgram",
-    "livekit-plugins-openai", 
-    "livekit-plugins-silero",
-    "livekit-plugins-anthropic",
-    "livekit-plugins-cartesia",
-    "livekit-plugins-elevenlabs",
+    "livekit-agents[deepgram,openai,silero]>=1.1.6",
+    "livekit-plugins-turn-detector>=1.1.5",
     
     # AI Services
-    "openai>=1.0.0",
+    "openai>=1.93.0",
     "deepgram-sdk>=4.5.0",
     
+    # TTS Models
+    "kokoro-onnx>=0.4.9",
+    
     # Audio Processing
-    "numpy",
-    "scipy",
+    "numpy>=2.0.0",
+    "scipy>=1.16.0",
     
-    # HTTP Client
-    "aiohttp",
-    "httpx",
-    
-    # WebSocket
-    "websockets",
+    # HTTP Client & WebSocket
+    "aiohttp>=3.12.0",
+    "websockets>=15.0.0",
     
     # Environment & Configuration
-    "python-dotenv",
-    "pydantic-settings",
+    "python-dotenv>=1.0.0",
+    "pydantic-settings>=2.0.0",
     
     # Logging
-    "structlog",
+    "structlog>=25.0.0",
 ]
 
 [project.optional-dependencies]
