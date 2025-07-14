@@ -65,9 +65,9 @@ def start_agent_worker():
         import subprocess
         import sys
 
-        # Run the spiritual worker in development mode
+        # Run the spiritual worker in development mode as a module
         result = subprocess.run(
-            [sys.executable, "spiritual_voice_agent/agents/spiritual_worker.py", "dev"],
+            [sys.executable, "-m", "spiritual_voice_agent.agents.spiritual_worker", "dev"],
             cwd=current_dir,
         )
 
