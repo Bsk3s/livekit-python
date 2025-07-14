@@ -51,7 +51,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Local development
         "http://localhost:19006",  # Expo web
-        "https://*.onrender.com",  # Render deployments
+        "https://*.up.railway.app",  # Railway deployments
         "https://*.expo.dev",  # Expo hosted apps
         "*",  # Allow all for now - restrict in production
     ],
@@ -61,7 +61,7 @@ app.add_middleware(
 )
 
 
-# Health check endpoint for Render - supports both GET and HEAD
+# Health check endpoint for Railway - supports both GET and HEAD
 @app.get("/health")
 @app.head("/health")
 async def health_check():

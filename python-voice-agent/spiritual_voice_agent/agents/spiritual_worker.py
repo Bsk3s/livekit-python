@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Production Spiritual Guidance Agent Worker
-Runs continuously on Render, spawning character instances when users join rooms
+Runs continuously on Railway, spawning character instances when users join rooms
 Deployment: January 29, 2025 - Ensuring worker service is active alongside API
 """
 
@@ -38,7 +38,7 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout),
         (
             logging.FileHandler("spiritual_agent.log")
-            if not os.getenv("RENDER")
+            if not os.getenv("RAILWAY")
             else logging.StreamHandler(sys.stdout)
         ),
     ],

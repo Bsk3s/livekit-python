@@ -4,7 +4,7 @@
 The Spiritual Guidance Voice Agent API provides real-time voice interactions with AI-powered spiritual guides.
 
 ## Base URL
-- Production: `https://your-app.onrender.com`
+- Production: `https://your-app.up.railway.app`
 - Development: `http://localhost:8000`
 
 ## Authentication
@@ -131,5 +131,5 @@ No rate limiting is currently implemented, but it's recommended for production u
 Configured for:
 - `http://localhost:3000` (React development)
 - `http://localhost:19006` (Expo web)
-- `https://*.onrender.com` (Deployment)
+- `https://*.up.railway.app` (Railway deployment)
 - `https://*.expo.dev` (Expo hosted apps) 

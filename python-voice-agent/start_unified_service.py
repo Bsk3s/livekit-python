@@ -25,7 +25,7 @@ def start_token_api():
         print("🌐 Starting Token API server...")
         from spiritual_voice_agent.main import app
 
-        # Get port from environment (Render sets this)
+        # Get port from environment (Railway sets this)
         port = int(os.getenv("PORT", 10000))
 
         # Use Python module approach to run uvicorn

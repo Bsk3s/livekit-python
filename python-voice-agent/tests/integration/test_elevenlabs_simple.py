@@ -103,13 +103,13 @@ def test_elevenlabs_simple():
     if not elevenlabs_key:
         print("📝 TO ENABLE ELEVENLABS:")
         print("   1. Get API key from: https://elevenlabs.io/")
-        print("   2. Add to Render environment variables:")
+        print("   2. Add to Railway environment variables:")
         print("      ELEVENLABS_API_KEY=your_api_key_here")
     
     if not openai_key:
         print("📝 TO ENABLE OPENAI FALLBACK:")
         print("   1. Get API key from: https://platform.openai.com/")
-        print("   2. Add to Render environment variables:")
+        print("   2. Add to Railway environment variables:")
         print("      OPENAI_API_KEY=your_api_key_here")
     
     print("\n" + "=" * 50)
