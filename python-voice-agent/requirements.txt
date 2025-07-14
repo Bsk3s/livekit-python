@@ -5,7 +5,7 @@ pydantic>=2.0.0
 
 # LiveKit Voice Agent Framework (let it manage its own dependencies)
 livekit-agents[deepgram,openai,silero]>=1.1.6
-livekit-plugins-turn-detector>=1.1.5
+livekit-plugins-turn-detector>=1.1.6
 
 # AI Services
 openai>=1.93.0

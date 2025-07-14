@@ -7,6 +7,7 @@ Runs both the FastAPI token API and LiveKit agent worker together
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -108,6 +109,24 @@ def main():
         )
         with open(voices_model_path, "wb") as f:
             f.write(voices.content)
+
+    # Download LiveKit turn detector models if on Railway
+    if os.getenv("RAILWAY_ENVIRONMENT"):
+        print("🤖 Downloading LiveKit turn detector models...")
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "spiritual_voice_agent.agents.spiritual_worker", "download-files"],
+                cwd=current_dir,
+                capture_output=True,
+                text=True,
+                timeout=120  # 2 minute timeout
+            )
+            if result.returncode == 0:
+                print("✅ LiveKit models downloaded successfully")
+            else:
+                print(f"⚠️ LiveKit model download completed with warnings: {result.stderr}")
+        except Exception as e:
+            print(f"⚠️ LiveKit model download failed (will retry at runtime): {e}")
 
     # Start token API in a separate process
     api_process = Process(target=start_token_api)
