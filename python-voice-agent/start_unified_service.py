@@ -85,26 +85,28 @@ def main():
     print(f"📂 Working directory: {os.getcwd()}")
     print("🚀 Launching both Token API and Agent Worker...")
 
+    # Get the directory where this script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    kokoro_dir = os.path.join(script_dir, "spiritual_voice_agent", "services", "tts", "implementations", "kokoro")
+    
+    # Create kokoro directory if it doesn't exist
+    os.makedirs(kokoro_dir, exist_ok=True)
+    
     print("Downloading kokoro model...")
-    if not os.path.exists(
-        "./spiritual_voice_agent/services/tts/implementations/kokoro/kokoro-v1.0.onnx"
-    ):
+    kokoro_model_path = os.path.join(kokoro_dir, "kokoro-v1.0.onnx")
+    if not os.path.exists(kokoro_model_path):
         model = requests.get(
             "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
         )
-        with open(
-            "./spiritual_voice_agent/services/tts/implementations/kokoro/kokoro-v1.0.onnx", "wb"
-        ) as f:
+        with open(kokoro_model_path, "wb") as f:
             f.write(model.content)
-    if not os.path.exists(
-        "./spiritual_voice_agent/services/tts/implementations/kokoro/voices-v1.0.bin"
-    ):
+    
+    voices_model_path = os.path.join(kokoro_dir, "voices-v1.0.bin")
+    if not os.path.exists(voices_model_path):
         voices = requests.get(
             "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
         )
-        with open(
-            "./spiritual_voice_agent/services/tts/implementations/kokoro/voices-v1.0.bin", "wb"
-        ) as f:
+        with open(voices_model_path, "wb") as f:
             f.write(voices.content)
 
     # Start token API in a separate process
