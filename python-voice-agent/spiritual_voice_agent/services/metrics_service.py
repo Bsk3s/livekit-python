@@ -51,10 +51,11 @@ class MetricsEvent:
 
 class MetricsService:
     """
-    Centralized metrics collection and storage with cost analytics integration.
+    🚀 ZERO-LATENCY METRICS SYSTEM
     
-    Enhanced to include cost tracking from the separate cost analytics system
-    that runs with zero voice pipeline impact.
+    Production-grade metrics with fire-and-forget async queue pattern.
+    Voice pipeline drops metrics and continues - zero latency impact.
+    Background worker processes queue independently.
     """
     
     def __init__(self, log_dir: str = "logs/metrics"):
@@ -62,222 +63,283 @@ class MetricsService:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.retention_days = 7
         
-        # Current day's log file
-        self._current_log_file = None
-        self._current_date = None
-        self._ensure_log_file()
+        # 🚀 ZERO-LATENCY: Fire-and-forget async queue
+        self._metrics_queue = asyncio.Queue(maxsize=10000)  # Large buffer for burst traffic
+        self._processing_task = None
+        self._running = False
         
-        # In-memory cache for dashboard (last 1000 events)
-        self._recent_events: List[MetricsEvent] = []
+        # In-memory cache for instant dashboard reads (thread-safe)
+        self._recent_events: List[Dict[str, Any]] = []
         self._max_cache_size = 1000
+        self._cache_lock = asyncio.Lock()
         
-        # Cost analytics integration (lazy-loaded to avoid import cycles)
-        self._cost_analytics_db = None
+        # Performance counters (atomic operations)
+        self._stats = {
+            "events_queued": 0,
+            "events_processed": 0,
+            "events_dropped": 0,
+            "queue_full_count": 0
+        }
         
-        logger.info(f"📊 MetricsService initialized - logging to {self.log_dir}")
+        logger.info(f"📊 Zero-Latency MetricsService initialized - logging to {self.log_dir}")
+        
+        # Start background processing immediately
+        self._start_background_processor()
 
-    def _ensure_log_file(self) -> Path:
-        """Ensure we have the correct log file for today"""
-        today = datetime.now().date()
-        
-        if self._current_date != today:
-            self._current_date = today
-            self._current_log_file = self.log_dir / f"metrics_{today.isoformat()}.jsonl"
-            logger.info(f"📊 Metrics logging to: {self._current_log_file}")
+    def _start_background_processor(self):
+        """Start the background metrics processing task"""
+        if self._processing_task and not self._processing_task.done():
+            return
             
-        return self._current_log_file
+        self._running = True
+        self._processing_task = asyncio.create_task(self._process_metrics_queue())
+        logger.info("📊 Background metrics processor started")
 
-    async def log_event(self, 
-                       session_id: str,
-                       character: str,
-                       tts_model: str,
-                       pipeline_metrics: PipelineMetrics,
-                       quality_metrics: QualityMetrics,
-                       context_metrics: ContextMetrics,
-                       source: str = "websocket") -> None:
-        """Log a metrics event asynchronously"""
+    async def _process_metrics_queue(self):
+        """Background task that processes metrics queue with zero voice impact"""
+        current_date = None
+        current_log_file = None
         
+        while self._running:
+            try:
+                # Get batch of events (non-blocking with timeout)
+                events_batch = []
+                
+                try:
+                    # Get first event (wait up to 1 second)
+                    event = await asyncio.wait_for(self._metrics_queue.get(), timeout=1.0)
+                    events_batch.append(event)
+                    
+                    # Collect additional events if available (non-blocking)
+                    while len(events_batch) < 50:  # Process in batches up to 50
+                        try:
+                            event = self._metrics_queue.get_nowait()
+                            events_batch.append(event)
+                        except asyncio.QueueEmpty:
+                            break
+                            
+                except asyncio.TimeoutError:
+                    # No events to process, continue loop
+                    continue
+                
+                # Process batch of events
+                if events_batch:
+                    await self._process_events_batch(events_batch)
+                    
+            except Exception as e:
+                logger.error(f"📊 Background metrics processor error: {e}")
+                await asyncio.sleep(1)  # Brief pause on error
+
+    async def _process_events_batch(self, events: List[Dict[str, Any]]):
+        """Process a batch of metrics events (runs in background)"""
         try:
-            event = MetricsEvent(
-                timestamp=datetime.now().isoformat(),
-                session_id=session_id,
-                character=character,
-                tts_model=tts_model,
-                pipeline_metrics=pipeline_metrics,
-                quality_metrics=quality_metrics,
-                context_metrics=context_metrics,
-                source=source
-            )
+            # Ensure log file for today
+            today = datetime.now().date()
+            log_file = self.log_dir / f"metrics_{today.isoformat()}.jsonl"
             
-            # Add to in-memory cache for dashboard
-            self._recent_events.append(event)
-            if len(self._recent_events) > self._max_cache_size:
-                self._recent_events.pop(0)
+            # Write batch to file (async I/O)
+            def write_batch():
+                with open(log_file, 'a') as f:
+                    for event in events:
+                        json.dump(event, f, separators=(',', ':'))
+                        f.write('\n')
             
-            # Write to JSON log file (async to avoid blocking)
-            await self._write_event_async(event)
+            # Run file I/O in thread pool
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, write_batch)
+            
+            # Update in-memory cache (thread-safe)
+            async with self._cache_lock:
+                self._recent_events.extend(events)
+                
+                # Trim cache if too large
+                if len(self._recent_events) > self._max_cache_size:
+                    trim_count = len(self._recent_events) - self._max_cache_size
+                    self._recent_events = self._recent_events[trim_count:]
+            
+            # Update stats
+            self._stats["events_processed"] += len(events)
+            
+            # Mark queue tasks as done
+            for _ in events:
+                self._metrics_queue.task_done()
             
         except Exception as e:
-            logger.error(f"📊 Failed to log metrics event: {e}")
+            logger.error(f"📊 Error processing metrics batch: {e}")
 
-    async def _write_event_async(self, event: MetricsEvent) -> None:
-        """Write event to JSON log file asynchronously"""
-        def write_to_file():
-            log_file = self._ensure_log_file()
-            with open(log_file, 'a') as f:
-                json.dump(asdict(event), f, separators=(',', ':'))
-                f.write('\n')
+    def log_event(self, event_data: Dict[str, Any]) -> None:
+        """
+        🚀 ZERO-LATENCY: Drop metrics event in queue and return immediately.
         
-        # Run file I/O in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, write_to_file)
+        This is called from the voice pipeline and MUST NOT block.
+        If queue is full, drop the event to preserve voice quality.
+        """
+        try:
+            # Add timestamp if not present
+            if 'timestamp' not in event_data:
+                event_data['timestamp'] = datetime.now().isoformat()
+            
+            # Try to add to queue (non-blocking)
+            try:
+                self._metrics_queue.put_nowait(event_data)
+                self._stats["events_queued"] += 1
+            except asyncio.QueueFull:
+                # Queue full - drop event to preserve voice latency
+                self._stats["events_dropped"] += 1
+                self._stats["queue_full_count"] += 1
+                # Don't log error - would add latency
+                pass
+                
+        except Exception:
+            # Silent failure to preserve voice latency
+            # Any error here should not impact voice processing
+            pass
 
-    def get_recent_events(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get recent events for dashboard"""
-        recent = self._recent_events[-limit:] if len(self._recent_events) > limit else self._recent_events
-        return [asdict(event) for event in reversed(recent)]  # Most recent first
+    async def get_recent_events(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get recent events for dashboard (thread-safe)"""
+        async with self._cache_lock:
+            recent = self._recent_events[-limit:] if len(self._recent_events) > limit else self._recent_events
+            return list(reversed(recent))  # Most recent first
 
     def get_performance_summary(self, hours: int = 1) -> Dict[str, Any]:
-        """Get performance summary for dashboard"""
-        cutoff_time = datetime.now() - timedelta(hours=hours)
-        
-        # Filter recent events
-        recent_events = []
-        for event in self._recent_events:
-            event_time = datetime.fromisoformat(event.timestamp.replace('Z', '+00:00').replace('+00:00', ''))
-            if event_time >= cutoff_time:
-                recent_events.append(event)
-        
-        if not recent_events:
+        """Get performance summary for dashboard (non-blocking)"""
+        try:
+            cutoff_time = datetime.now() - timedelta(hours=hours)
+            
+            # Filter recent events (no async - read from cache snapshot)
+            recent_events = []
+            cache_snapshot = self._recent_events.copy()  # Atomic copy
+            
+            for event in cache_snapshot:
+                try:
+                    event_time = datetime.fromisoformat(event.get('timestamp', ''))
+                    if event_time >= cutoff_time:
+                        recent_events.append(event)
+                except (ValueError, TypeError):
+                    continue
+            
+            if not recent_events:
+                return {
+                    "total_requests": 0,
+                    "success_rate": 0.0,
+                    "avg_latency_ms": 0.0,
+                    "stage_breakdown": {
+                        "stt_avg_ms": 0,
+                        "llm_avg_ms": 0,
+                        "tts_avg_ms": 0
+                    },
+                    "character_performance": {
+                        "adina": {"avg_latency_ms": 0, "requests": 0},
+                        "raffa": {"avg_latency_ms": 0, "requests": 0}
+                    },
+                    "system_stats": self._stats.copy()
+                }
+
+            # Calculate metrics from cache data
+            total_requests = len(recent_events)
+            successful_requests = []
+            
+            for event in recent_events:
+                quality_metrics = event.get('quality_metrics', {})
+                if isinstance(quality_metrics, dict) and quality_metrics.get('success', False):
+                    successful_requests.append(event)
+            
+            success_rate = len(successful_requests) / total_requests if total_requests > 0 else 0
+
+            if successful_requests:
+                # Calculate average latencies
+                latencies = []
+                stt_times = []
+                llm_times = []
+                tts_times = []
+                
+                for event in successful_requests:
+                    pipeline = event.get('pipeline_metrics', {})
+                    if isinstance(pipeline, dict):
+                        total_latency = pipeline.get('total_latency_ms', 0)
+                        if total_latency > 0:
+                            latencies.append(total_latency)
+                        
+                        stt_latency = pipeline.get('stt_latency_ms')
+                        if stt_latency and stt_latency > 0:
+                            stt_times.append(stt_latency)
+                            
+                        llm_latency = pipeline.get('llm_latency_ms')
+                        if llm_latency and llm_latency > 0:
+                            llm_times.append(llm_latency)
+                            
+                        tts_latency = pipeline.get('tts_first_chunk_ms')
+                        if tts_latency and tts_latency > 0:
+                            tts_times.append(tts_latency)
+                
+                avg_latency = sum(latencies) / len(latencies) if latencies else 0
+                
+                stage_breakdown = {
+                    "stt_avg_ms": sum(stt_times) / len(stt_times) if stt_times else 0,
+                    "llm_avg_ms": sum(llm_times) / len(llm_times) if llm_times else 0,
+                    "tts_avg_ms": sum(tts_times) / len(tts_times) if tts_times else 0
+                }
+                
+                # Character performance
+                character_perf = {}
+                for char in ["adina", "raffa"]:
+                    char_events = [e for e in successful_requests if e.get('character') == char]
+                    if char_events:
+                        char_latencies = []
+                        for e in char_events:
+                            pipeline = e.get('pipeline_metrics', {})
+                            if isinstance(pipeline, dict):
+                                lat = pipeline.get('total_latency_ms', 0)
+                                if lat > 0:
+                                    char_latencies.append(lat)
+                        
+                        char_avg = sum(char_latencies) / len(char_latencies) if char_latencies else 0
+                        character_perf[char] = {
+                            "avg_latency_ms": char_avg,
+                            "requests": len(char_events)
+                        }
+                    else:
+                        character_perf[char] = {"avg_latency_ms": 0, "requests": 0}
+            else:
+                avg_latency = 0
+                stage_breakdown = {"stt_avg_ms": 0, "llm_avg_ms": 0, "tts_avg_ms": 0}
+                character_perf = {
+                    "adina": {"avg_latency_ms": 0, "requests": 0},
+                    "raffa": {"avg_latency_ms": 0, "requests": 0}
+                }
+
+            return {
+                "total_requests": total_requests,
+                "success_rate": success_rate,
+                "avg_latency_ms": avg_latency,
+                "stage_breakdown": stage_breakdown,
+                "character_performance": character_perf,
+                "system_stats": self._stats.copy()
+            }
+            
+        except Exception as e:
+            logger.error(f"📊 Error generating performance summary: {e}")
             return {
                 "total_requests": 0,
                 "success_rate": 0.0,
                 "avg_latency_ms": 0.0,
-                "stage_breakdown": {},
-                "character_performance": {}
+                "stage_breakdown": {"stt_avg_ms": 0, "llm_avg_ms": 0, "tts_avg_ms": 0},
+                "character_performance": {"adina": {"avg_latency_ms": 0, "requests": 0}, "raffa": {"avg_latency_ms": 0, "requests": 0}},
+                "system_stats": self._stats.copy()
             }
 
-        # Calculate metrics
-        total_requests = len(recent_events)
-        successful_requests = [e for e in recent_events if e.quality_metrics.success]
-        success_rate = len(successful_requests) / total_requests if total_requests > 0 else 0
-
-        if successful_requests:
-            # Average latencies
-            avg_latency = sum(e.pipeline_metrics.total_latency_ms for e in successful_requests) / len(successful_requests)
-            
-            # Stage breakdown
-            stt_times = [e.pipeline_metrics.stt_latency_ms for e in successful_requests if e.pipeline_metrics.stt_latency_ms]
-            llm_times = [e.pipeline_metrics.llm_latency_ms for e in successful_requests if e.pipeline_metrics.llm_latency_ms]
-            tts_times = [e.pipeline_metrics.tts_first_chunk_ms for e in successful_requests if e.pipeline_metrics.tts_first_chunk_ms]
-            
-            stage_breakdown = {
-                "stt_avg_ms": sum(stt_times) / len(stt_times) if stt_times else 0,
-                "llm_avg_ms": sum(llm_times) / len(llm_times) if llm_times else 0,
-                "tts_avg_ms": sum(tts_times) / len(tts_times) if tts_times else 0
-            }
-            
-            # Character performance
-            character_perf = {}
-            for char in ["adina", "raffa"]:
-                char_events = [e for e in successful_requests if e.character == char]
-                if char_events:
-                    char_avg = sum(e.pipeline_metrics.total_latency_ms for e in char_events) / len(char_events)
-                    character_perf[char] = {
-                        "avg_latency_ms": char_avg,
-                        "requests": len(char_events)
-                    }
-        else:
-            avg_latency = 0
-            stage_breakdown = {}
-            character_perf = {}
-
-        # Add cost analytics data
-        cost_summary = self._get_cost_summary(hours)
-
-        return {
-            "total_requests": total_requests,
-            "success_rate": success_rate,
-            "avg_latency_ms": avg_latency,
-            "stage_breakdown": stage_breakdown,
-            "character_performance": character_perf,
-            "cost_analytics": cost_summary,
-            "time_period_hours": hours
-        }
-
-    def _get_cost_analytics_db(self):
-        """Get cost analytics database instance (lazy-loaded)"""
-        if self._cost_analytics_db is None:
+    async def cleanup(self):
+        """Clean shutdown of background processor"""
+        self._running = False
+        if self._processing_task:
+            self._processing_task.cancel()
             try:
-                # Import here to avoid circular dependencies
-                from spiritual_voice_agent.services.cost_analytics import get_cost_analytics_db
-                self._cost_analytics_db = get_cost_analytics_db()
-            except ImportError as e:
-                logger.warning(f"📊 Cost analytics not available: {e}")
-                return None
-        return self._cost_analytics_db
+                await self._processing_task
+            except asyncio.CancelledError:
+                pass
+        logger.info("📊 Metrics service shutdown complete")
 
-    def _get_cost_summary(self, hours: int = 1) -> Dict[str, Any]:
-        """Get cost summary from cost analytics database"""
-        try:
-            cost_db = self._get_cost_analytics_db()
-            if cost_db is None:
-                return {
-                    "total_cost": 0.0,
-                    "cost_breakdown": {"stt": 0.0, "llm": 0.0, "tts": 0.0},
-                    "avg_cost_per_turn": 0.0,
-                    "available": False
-                }
-            
-            # Convert hours to days for cost analytics query
-            days = max(1, hours // 24) if hours >= 24 else 1
-            cost_data = cost_db.get_cost_summary(days)
-            
-            return {
-                "total_cost": cost_data.get("total_cost", 0.0),
-                "cost_breakdown": {
-                    "stt": cost_data.get("total_stt_cost", 0.0),
-                    "llm": cost_data.get("total_llm_cost", 0.0),
-                    "tts": cost_data.get("total_tts_cost", 0.0)
-                },
-                "avg_cost_per_turn": cost_data.get("avg_cost_per_turn", 0.0),
-                "total_conversations": cost_data.get("total_conversations", 0),
-                "unique_users": cost_data.get("unique_users", 0),
-                "available": True
-            }
-            
-        except Exception as e:
-            logger.warning(f"📊 Failed to get cost summary: {e}")
-            return {
-                "total_cost": 0.0,
-                "cost_breakdown": {"stt": 0.0, "llm": 0.0, "tts": 0.0},
-                "avg_cost_per_turn": 0.0,
-                "available": False,
-                "error": str(e)
-            }
-
-    async def cleanup_old_logs(self) -> None:
-        """Remove log files older than retention_days"""
-        try:
-            cutoff_date = datetime.now().date() - timedelta(days=self.retention_days)
-            
-            for log_file in self.log_dir.glob("metrics_*.jsonl"):
-                try:
-                    # Extract date from filename
-                    date_str = log_file.stem.replace("metrics_", "")
-                    file_date = datetime.fromisoformat(date_str).date()
-                    
-                    if file_date < cutoff_date:
-                        log_file.unlink()
-                        logger.info(f"📊 Cleaned up old metrics file: {log_file}")
-                        
-                except Exception as e:
-                    logger.warning(f"📊 Could not parse date from metrics file {log_file}: {e}")
-                    
-        except Exception as e:
-            logger.error(f"📊 Error during metrics cleanup: {e}")
-
-# Global metrics service instance
+# Global singleton instance
 _metrics_service: Optional[MetricsService] = None
 
 def get_metrics_service() -> MetricsService:
@@ -287,22 +349,9 @@ def get_metrics_service() -> MetricsService:
         _metrics_service = MetricsService()
     return _metrics_service
 
-class TimingContext:
-    """Context manager for timing operations"""
-    
-    def __init__(self, name: str):
-        self.name = name
-        self.start_time = None
-        self.duration_ms = None
-    
-    def __enter__(self):
-        self.start_time = time.perf_counter()
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.start_time:
-            self.duration_ms = (time.perf_counter() - self.start_time) * 1000
-
-def timing_context(name: str) -> TimingContext:
-    """Create a timing context for measuring operation duration"""
-    return TimingContext(name) 
+async def cleanup_metrics():
+    """Clean shutdown of metrics service"""
+    global _metrics_service
+    if _metrics_service:
+        await _metrics_service.cleanup()
+        _metrics_service = None 
