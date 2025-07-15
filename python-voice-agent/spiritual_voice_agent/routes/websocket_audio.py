@@ -27,7 +27,7 @@ from spiritual_voice_agent.services.stt.implementations.direct_deepgram import (
 )
 from spiritual_voice_agent.services.tts_factory import TTSFactory
 
-from ..utils.audio import convert_to_ios_format, chunk_ai_response, pcm_to_wav
+from ..utils.audio import convert_to_ios_format
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
