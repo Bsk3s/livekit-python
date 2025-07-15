@@ -2106,8 +2106,44 @@ async def handle_json_message(
                         transcription = await session.process_audio_chunk(audio_data, websocket)
 
                         if transcription:
+                            # 📊 METRICS: Track complete conversation turn (JSON audio flow)
+                            turn_start_time = time.time()
+                            
                             # Process and stream response in chunks
                             await session.process_and_stream_response(websocket, transcription)
+                            
+                            # 📊 METRICS: Log conversation metrics for JSON audio flow
+                            try:
+                                total_latency_ms = int((time.time() - turn_start_time) * 1000)
+                                metrics_event = {
+                                    "session_id": session.session_id,
+                                    "character": session.character,
+                                    "source": "websocket_audio_json",
+                                    "pipeline_metrics": {
+                                        "stt_latency_ms": session._timing_data.get('stt_latency_ms', 0),
+                                        "llm_latency_ms": session._timing_data.get('llm_latency_ms', 0),
+                                        "tts_first_chunk_ms": session._timing_data.get('tts_first_chunk_ms', 0),
+                                        "total_latency_ms": total_latency_ms
+                                    },
+                                    "quality_metrics": {
+                                        "success": True,
+                                        "transcription_success": bool(transcription and transcription.strip()),
+                                        "response_generated": True
+                                    },
+                                    "context_metrics": {
+                                        "conversation_turn": session.conversation_turn_count,
+                                        "audio_duration_seconds": len(audio_data) / (48000 * 2)
+                                    }
+                                }
+                                
+                                session._metrics_service.log_event(metrics_event)
+                                logger.info(f"📊 JSON audio metrics logged: {total_latency_ms}ms total")
+                                
+                                # Clear timing data
+                                session._timing_data.clear()
+                                
+                            except Exception as metrics_error:
+                                logger.warning(f"📊 JSON audio metrics failed (non-blocking): {metrics_error}")
                     else:
                         logger.warning("⚠️ Empty audio data in JSON message")
 
