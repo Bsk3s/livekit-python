@@ -26,12 +26,11 @@ async def lifespan(app: FastAPI):
     logger.info(f"🔗 Environment: {os.getenv('ENVIRONMENT', 'development')}")
     logger.info(f"🎭 Available characters: Adina (compassionate), Raffa (wise)")
 
-    # 📊 METRICS: Initialize metrics service and cleanup old logs
+    # 📊 METRICS: Initialize zero-latency metrics service
     from spiritual_voice_agent.services.metrics_service import get_metrics_service
 
     metrics_service = get_metrics_service()
-    await metrics_service.cleanup_old_logs()
-    logger.info("📊 Metrics service initialized and old logs cleaned up")
+    logger.info("📊 Zero-latency metrics service initialized")
 
     yield
     # Shutdown
