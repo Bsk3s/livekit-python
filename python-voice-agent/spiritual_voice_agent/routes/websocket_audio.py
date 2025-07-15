@@ -1,22 +1,25 @@
 import asyncio
 import base64
+import io
 import json
 import logging
 import re
 import struct
 import time
 import uuid
+import wave
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from fastapi.websockets import WebSocketState
+from starlette.websockets import WebSocketState
 
 from spiritual_voice_agent.characters.character_factory import CharacterFactory
 
 # Cost Analytics imports for voice-first tracking
 from spiritual_voice_agent.services.cost_analytics import log_voice_event
 from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
+from spiritual_voice_agent.services.metrics_service import get_metrics_service
 
 # Import existing services
 from spiritual_voice_agent.services.stt.implementations.direct_deepgram import (
@@ -24,7 +27,7 @@ from spiritual_voice_agent.services.stt.implementations.direct_deepgram import (
 )
 from spiritual_voice_agent.services.tts_factory import TTSFactory
 
-from ..utils.audio import convert_to_ios_format
+from ..utils.audio import convert_to_ios_format, chunk_ai_response, pcm_to_wav
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -270,6 +273,10 @@ class AudioSession:
         self._max_state_duration = 15.0  # Allow time for longer LLM responses (12s + buffer)
         self._last_health_check = time.time()  # Quick health status cache
         self._current_websocket: Optional[WebSocket] = None  # Track current websocket connection
+
+        # 📊 METRICS INTEGRATION - Connect voice pipeline to dashboard
+        self._metrics_service = get_metrics_service()
+        self._timing_data = {}  # Store timing data for complete conversation turn logging
 
     async def initialize(self):
         """Initialize all services for this session"""
@@ -648,10 +655,16 @@ class AudioSession:
                     logger.debug(
                         f"🛡️ Starting STT transcription (mode: {processing_mode}, timeout: {timeout_seconds}s)..."
                     )
+                    
+                    # 📊 METRICS: Capture STT timing
+                    stt_start_time = time.perf_counter()
                     transcription = await asyncio.wait_for(
                         self.stt_service.transcribe_audio_bytes(wav_audio), timeout=timeout_seconds
                     )
-                    logger.debug(f"🛡️ STT transcription completed")
+                    stt_duration_ms = (time.perf_counter() - stt_start_time) * 1000
+                    self._timing_data['stt_latency_ms'] = stt_duration_ms
+                    
+                    logger.debug(f"🛡️ STT transcription completed in {stt_duration_ms:.1f}ms")
 
                     if transcription and transcription.strip():
                         # Send complete transcription (check connection first)
@@ -1302,6 +1315,38 @@ class AudioSession:
             # Calculate total conversation turn latency
             total_latency_ms = int((time.time() - turn_start_time) * 1000)
 
+            # 📊 METRICS LOGGING: Log complete conversation turn metrics
+            try:
+                metrics_event = {
+                    "session_id": self.session_id,
+                    "character": self.character,
+                    "source": "websocket_audio",
+                    "pipeline_metrics": {
+                        "stt_latency_ms": self._timing_data.get('stt_latency_ms', 0),
+                        "llm_latency_ms": self._timing_data.get('llm_latency_ms', 0),
+                        "tts_first_chunk_ms": self._timing_data.get('tts_first_chunk_ms', 0),
+                        "total_latency_ms": total_latency_ms
+                    },
+                    "quality_metrics": {
+                        "success": True,
+                        "transcription_success": bool(user_input and user_input.strip()),
+                        "response_generated": True
+                    },
+                    "context_metrics": {
+                        "conversation_turn": self.conversation_turn_count,
+                        "audio_duration_seconds": audio_duration_seconds or 0
+                    }
+                }
+                
+                self._metrics_service.log_event(metrics_event)
+                logger.debug(f"📊 Logged metrics event: {total_latency_ms}ms total")
+                
+                # Clear timing data for next turn
+                self._timing_data.clear()
+                
+            except Exception as metrics_error:
+                logger.warning(f"📊 Metrics logging failed (non-blocking): {metrics_error}")
+
             # 🎯 ZERO-IMPACT COST LOGGING (fire-and-forget, microseconds operation)
             log_voice_event(
                 {
@@ -1323,6 +1368,40 @@ class AudioSession:
             # Voice processing complete - cost logging happens in background
 
         except Exception as e:
+            # 📊 METRICS LOGGING: Log error case
+            try:
+                error_latency_ms = int((time.time() - turn_start_time) * 1000)
+                error_metrics_event = {
+                    "session_id": self.session_id,
+                    "character": self.character,
+                    "source": "websocket_audio",
+                    "pipeline_metrics": {
+                        "stt_latency_ms": self._timing_data.get('stt_latency_ms', 0),
+                        "llm_latency_ms": self._timing_data.get('llm_latency_ms', 0),
+                        "tts_first_chunk_ms": self._timing_data.get('tts_first_chunk_ms', 0),
+                        "total_latency_ms": error_latency_ms
+                    },
+                    "quality_metrics": {
+                        "success": False,
+                        "transcription_success": bool(user_input and user_input.strip()),
+                        "response_generated": False,
+                        "error_message": str(e)
+                    },
+                    "context_metrics": {
+                        "conversation_turn": self.conversation_turn_count,
+                        "audio_duration_seconds": audio_duration_seconds or 0
+                    }
+                }
+                
+                self._metrics_service.log_event(error_metrics_event)
+                logger.debug(f"📊 Logged error metrics event: {error_latency_ms}ms total")
+                
+                # Clear timing data
+                self._timing_data.clear()
+                
+            except Exception as metrics_error:
+                logger.warning(f"📊 Error metrics logging failed (non-blocking): {metrics_error}")
+
             # Even errors get logged for cost analysis (fire-and-forget)
             log_voice_event(
                 {
@@ -1384,11 +1463,17 @@ class AudioSession:
             # 🛡️ CRITICAL: LLM call with aggressive timeout protection
             try:
                 logger.debug(f"🛡️ Starting LLM generation...")
+                
+                # 📊 METRICS: Capture LLM timing
+                llm_start_time = time.perf_counter()
                 response_text = await asyncio.wait_for(
                     self.generate_response(user_input),
                     timeout=12.0,  # Increased to 12s for longer responses (especially during testing)
                 )
-                logger.debug(f"🛡️ LLM generation completed")
+                llm_duration_ms = (time.perf_counter() - llm_start_time) * 1000
+                self._timing_data['llm_latency_ms'] = llm_duration_ms
+                
+                logger.debug(f"🛡️ LLM generation completed in {llm_duration_ms:.1f}ms")
             except asyncio.TimeoutError:
                 logger.error(f"🛡️ LLM timeout after 12s - forcing reset")
                 self._force_reset_state("LISTENING", "llm_timeout")
@@ -1461,8 +1546,11 @@ class AudioSession:
             audio_chunks = [chunk[1] for chunk in audio_chunks]
 
             tts_duration = time.time() - tts_start_time
+            tts_duration_ms = tts_duration * 1000
+            self._timing_data['tts_first_chunk_ms'] = tts_duration_ms
+            
             logger.info(
-                f"🎤 TTS generation completed: {len(audio_chunks)} chunks in {tts_duration:.2f}s"
+                f"🎤 TTS generation completed: {len(audio_chunks)} chunks in {tts_duration:.2f}s ({tts_duration_ms:.1f}ms)"
             )
 
             if not audio_chunks:
