@@ -15,6 +15,14 @@ anthropic>=0.56.0
 # TTS Models
 kokoro-onnx>=0.4.9
 
+# 🚀 GPU ACCELERATION: CUDA-enabled ONNX Runtime for Kokoro
+onnxruntime-gpu>=1.16.0  # CUDA-enabled ONNX Runtime
+# onnxruntime>=1.16.0    # CPU fallback (automatically installed by kokoro-onnx)
+
+# ML Dependencies for AI Turn Detection
+torch>=2.0.0
+transformers>=4.30.0
+
 # Audio Processing Essentials
 numpy>=2.0.0
 scipy>=1.16.0

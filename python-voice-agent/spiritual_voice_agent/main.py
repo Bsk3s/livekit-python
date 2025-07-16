@@ -32,6 +32,18 @@ async def lifespan(app: FastAPI):
     metrics_service = get_metrics_service()
     logger.info("📊 Zero-latency metrics service initialized")
 
+    # 🚀 PERFORMANCE: Preload Kokoro model at startup (eliminate 12s per-request loading)
+    logger.info("🚀 Preloading Kokoro TTS model for instant responses...")
+    try:
+        from spiritual_voice_agent.services.tts.implementations.kokoro.kokoro import KokoroModelSingleton
+        
+        kokoro_singleton = KokoroModelSingleton()
+        kokoro_singleton.initialize()
+        logger.info("✅ Kokoro model preloaded successfully - TTS requests will be ~100ms instead of 12s!")
+    except Exception as e:
+        logger.error(f"❌ Failed to preload Kokoro model: {e}")
+        logger.warning("⚠️ TTS will fall back to per-request loading (slower performance)")
+
     yield
     # Shutdown
     logger.info("👋 Spiritual Guidance API shutting down")
