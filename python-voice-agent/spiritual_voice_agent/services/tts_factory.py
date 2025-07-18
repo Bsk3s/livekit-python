@@ -13,7 +13,7 @@ from livekit.agents import tts
 logger = logging.getLogger(__name__)
 
 # 🔧 EASY CONFIGURATION: Change this to switch TTS models
-TTS_MODEL = os.getenv("TTS_MODEL", "wav")  # openai, custom, gemini, elevenlabs, wav
+TTS_MODEL = os.getenv("TTS_MODEL", "kokoro")  # openai, custom, gemini, elevenlabs, wav
 
 
 class TTSFactory:
