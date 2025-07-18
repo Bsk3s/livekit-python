@@ -21,7 +21,8 @@ from spiritual_voice_agent.services.cost_analytics import log_voice_event
 from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
 from spiritual_voice_agent.services.metrics_service import get_metrics_service
 
-# Import existing services
+# Import existing services  
+# Legacy import kept for fallback
 from spiritual_voice_agent.services.stt.implementations.direct_deepgram import (
     DirectDeepgramSTTService,
 )
@@ -277,23 +278,31 @@ class AudioSession:
         # 📊 METRICS INTEGRATION - Connect voice pipeline to dashboard
         self._metrics_service = get_metrics_service()
         self._timing_data = {}  # Store timing data for complete conversation turn logging
+        
+        # 🎯 STREAMING STT INTEGRATION
+        self._pending_transcription_queue = asyncio.Queue()
+        self._transcription_results = {}  # Store transcription results by timestamp
 
     async def initialize(self):
         """Initialize all services for this session"""
         logger.info(f"🚀 STARTING AudioSession.initialize() for session {self.session_id}")
         try:
-            # STT Service - Direct Deepgram (no LiveKit context needed)
-            logger.info(f"🎧 Creating STT service for session {self.session_id}")
-            self.stt_service = DirectDeepgramSTTService(
+            # STT Service - Streaming WebSocket Deepgram for sub-100ms latency
+            logger.info(f"🎧 Creating Streaming STT service for session {self.session_id}")
+            from spiritual_voice_agent.services.stt.implementations.streaming_deepgram import StreamingDeepgramSTTService
+            
+            self.stt_service = StreamingDeepgramSTTService(
                 {
                     "model": "nova-2",
                     "language": "en-US",
-                    "punctuate": True,
-                    "interim_results": False,
                 }
             )
+            
+            # Set up transcription callback for real-time results
+            self.stt_service.set_transcription_callback(self._handle_streaming_transcription)
+            
             await self.stt_service.initialize()
-            logger.info(f"✅ STT service initialized for session {self.session_id}")
+            logger.info(f"✅ Streaming STT service initialized for session {self.session_id}")
 
             # LLM Service - Fixed OpenAI adapter
             logger.info(f"🧠 Creating LLM service for session {self.session_id}")
@@ -336,6 +345,47 @@ class AudioSession:
             self.conversation_state = new_state
             self._state_change_time = time.time()
             logger.info(f"🛡️ State change: {old_state} → {new_state} at {self._state_change_time}")
+
+    async def _handle_streaming_transcription(self, transcript: str, is_final: bool, confidence: float, latency_ms: float) -> None:
+        """Handle real-time transcription results from streaming Deepgram"""
+        try:
+            if is_final and transcript.strip():
+                # Log the ultra-low latency achievement
+                logger.info(f"📝 STREAMING STT: '{transcript}' (latency: {latency_ms:.1f}ms, confidence: {confidence:.2f})")
+                
+                # Store the result for processing
+                timestamp = time.time()
+                self._transcription_results[timestamp] = {
+                    'text': transcript.strip(),
+                    'confidence': confidence,
+                    'latency_ms': latency_ms,
+                    'timestamp': timestamp
+                }
+                
+                # If we're in listening state, trigger immediate processing
+                if self.conversation_state == "LISTENING" and self.session_active:
+                    # Update timing data with actual STT latency
+                    self._timing_data['stt_latency_ms'] = latency_ms
+                    
+                    # Send transcription complete event
+                    if self._current_websocket:
+                        await self._current_websocket.send_json({
+                            "type": "transcription_complete",
+                            "text": transcript.strip(),
+                            "conversation_state": self.conversation_state,
+                            "stt_latency_ms": latency_ms,
+                            "timestamp": datetime.now().isoformat(),
+                        })
+                    
+                    # Process the conversation
+                    asyncio.create_task(self._handle_complete_conversation_turn(transcript.strip(), self._current_websocket))
+                    
+            elif transcript.strip():
+                # Log interim results for debugging
+                logger.debug(f"📝 interim: '{transcript}' (confidence: {confidence:.2f})")
+                
+        except Exception as e:
+            logger.error(f"❌ Error handling streaming transcription: {e}")
 
     def _start_watchdog(self):
         """Start background watchdog timer (runs independently, zero latency impact)"""
@@ -499,6 +549,9 @@ class AudioSession:
         VAD Processing: Always active regardless of conversation state
         Transcription Processing: Only in LISTENING state
         """
+        # Store current websocket for streaming callbacks
+        self._current_websocket = websocket
+        
         # Performance monitoring for VAD decoupling
         chunk_start_time = time.perf_counter()
 
@@ -656,15 +709,27 @@ class AudioSession:
                         f"🛡️ Starting STT transcription (mode: {processing_mode}, timeout: {timeout_seconds}s)..."
                     )
                     
-                    # 📊 METRICS: Capture STT timing
+                    # 📊 METRICS: Send raw PCM directly to WebSocket STT (no WAV conversion!)
                     stt_start_time = time.perf_counter()
-                    transcription = await asyncio.wait_for(
-                        self.stt_service.transcribe_audio_bytes(wav_audio), timeout=timeout_seconds
-                    )
+                    
+                    # Send raw PCM audio directly to streaming Deepgram
+                    if hasattr(self.stt_service, 'send_audio_chunk'):
+                        # Use new streaming method
+                        await self.stt_service.send_audio_chunk(audio_bytes)
+                        logger.debug(f"🛡️ Audio chunk sent to streaming STT in {(time.perf_counter() - stt_start_time) * 1000:.1f}ms")
+                        
+                        # For streaming, transcription comes via callback, not here
+                        # We'll get the result through the callback mechanism
+                        transcription = None
+                    else:
+                        # Fallback to legacy method
+                        wav_audio = pcm_to_wav(audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16)
+                        transcription = await asyncio.wait_for(
+                            self.stt_service.transcribe_audio_bytes(wav_audio), timeout=timeout_seconds
+                        )
+                    
                     stt_duration_ms = (time.perf_counter() - stt_start_time) * 1000
                     self._timing_data['stt_latency_ms'] = stt_duration_ms
-                    
-                    logger.debug(f"🛡️ STT transcription completed in {stt_duration_ms:.1f}ms")
 
                     if transcription and transcription.strip():
                         # Send complete transcription (check connection first)
