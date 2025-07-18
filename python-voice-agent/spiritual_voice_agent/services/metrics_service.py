@@ -308,12 +308,16 @@ class MetricsService:
                     "raffa": {"avg_latency_ms": 0, "requests": 0}
                 }
 
+            # 🚀 PHASE 2C: Calculate streaming-specific metrics
+            streaming_metrics = self._calculate_streaming_metrics(successful_requests)
+            
             return {
                 "total_requests": total_requests,
                 "success_rate": success_rate,
                 "avg_latency_ms": avg_latency,
                 "stage_breakdown": stage_breakdown,
                 "character_performance": character_perf,
+                "streaming_metrics": streaming_metrics,
                 "system_stats": self._stats.copy()
             }
             
@@ -325,7 +329,70 @@ class MetricsService:
                 "avg_latency_ms": 0.0,
                 "stage_breakdown": {"stt_avg_ms": 0, "llm_avg_ms": 0, "tts_avg_ms": 0},
                 "character_performance": {"adina": {"avg_latency_ms": 0, "requests": 0}, "raffa": {"avg_latency_ms": 0, "requests": 0}},
+                "streaming_metrics": {"first_token_avg_ms": 0, "streaming_usage_pct": 0, "parallel_tts_chunks_avg": 0, "early_trigger_success_pct": 0},
                 "system_stats": self._stats.copy()
+            }
+    
+    def _calculate_streaming_metrics(self, successful_requests: list) -> dict:
+        """
+        🚀 PHASE 2C: Calculate streaming-specific performance metrics
+        """
+        try:
+            if not successful_requests:
+                return {
+                    "first_token_avg_ms": 0,
+                    "streaming_usage_pct": 0.0,
+                    "parallel_tts_chunks_avg": 0.0,
+                    "early_trigger_success_pct": 0.0
+                }
+            
+            # Extract streaming metrics from events
+            first_token_latencies = []
+            streaming_mode_count = 0
+            parallel_tts_chunks = []
+            early_trigger_count = 0
+            
+            for event in successful_requests:
+                pipeline_metrics = event.get('pipeline_metrics', {})
+                if isinstance(pipeline_metrics, dict):
+                    # First token latency (Phase 2C streaming)
+                    first_token_ms = pipeline_metrics.get('llm_first_token_ms', 0)
+                    if first_token_ms > 0:
+                        first_token_latencies.append(first_token_ms)
+                        streaming_mode_count += 1
+                    
+                    # TTS first chunk latency (indicates streaming)
+                    tts_first_chunk = pipeline_metrics.get('tts_first_chunk_ms', 0)
+                    if tts_first_chunk > 0:
+                        parallel_tts_chunks.append(1)  # At least one chunk processed
+                
+                # Count early trigger events (Progressive streaming)
+                context_metrics = event.get('context_metrics', {})
+                if isinstance(context_metrics, dict):
+                    early_trigger = context_metrics.get('early_trigger_used', False)
+                    if early_trigger:
+                        early_trigger_count += 1
+            
+            # Calculate averages
+            first_token_avg = sum(first_token_latencies) / len(first_token_latencies) if first_token_latencies else 0
+            streaming_usage_pct = (streaming_mode_count / len(successful_requests)) * 100 if successful_requests else 0
+            parallel_tts_avg = sum(parallel_tts_chunks) / len(parallel_tts_chunks) if parallel_tts_chunks else 0
+            early_trigger_success_pct = (early_trigger_count / len(successful_requests)) * 100 if successful_requests else 0
+            
+            return {
+                "first_token_avg_ms": round(first_token_avg, 1),
+                "streaming_usage_pct": round(streaming_usage_pct, 1),
+                "parallel_tts_chunks_avg": round(parallel_tts_avg, 1),
+                "early_trigger_success_pct": round(early_trigger_success_pct, 1)
+            }
+            
+        except Exception as e:
+            logger.warning(f"Error calculating streaming metrics: {e}")
+            return {
+                "first_token_avg_ms": 0,
+                "streaming_usage_pct": 0.0,
+                "parallel_tts_chunks_avg": 0.0,
+                "early_trigger_success_pct": 0.0
             }
 
     async def cleanup(self):

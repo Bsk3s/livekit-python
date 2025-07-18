@@ -93,16 +93,16 @@ def pcm_to_wav(
     return wav_data
 
 
-def chunk_ai_response(full_response: str, max_chunk_length: int = 100) -> List[str]:
+def chunk_ai_response(full_response: str, max_chunk_length: int = 50) -> List[str]:  # 🚀 SMART CHUNKING: 50 chars for natural phrases
     """
-    Split AI response into natural chunks for streaming audio
+    Split AI response into natural phrase chunks for smooth TTS streaming
 
     Args:
         full_response: Complete AI response text
-        max_chunk_length: Target maximum characters per chunk
+        max_chunk_length: Target maximum characters per chunk (BALANCED: 50 chars)
 
     Returns:
-        List of text chunks optimized for TTS streaming
+        List of phrase-chunks optimized for natural speech flow + speed
     """
     if not full_response or not full_response.strip():
         return []
@@ -110,61 +110,65 @@ def chunk_ai_response(full_response: str, max_chunk_length: int = 100) -> List[s
     # Clean the response
     text = full_response.strip()
 
-    # Split by sentences first (prioritize natural breaks)
-    sentence_endings = r"[.!?]+\s+"
-    sentences = re.split(sentence_endings, text)
-
+    # 🚀 SMART CHUNKING: Break at natural phrase boundaries
+    # Priority: clause breaks > word groups > forced splits
+    natural_breaks = [',', ';', ' and ', ' but ', ' or ', ' so ', ' then ', ' now ', ' here ']
+    
     chunks = []
-    current_chunk = ""
-
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-
-        # Add sentence ending back (except for last sentence)
-        if not sentence.endswith((".", "!", "?")):
-            sentence += "."
-
-        # Check if adding this sentence exceeds chunk length
-        if len(current_chunk + " " + sentence) <= max_chunk_length or not current_chunk:
-            # Add to current chunk
-            if current_chunk:
-                current_chunk += " " + sentence
+    remaining_text = text
+    
+    while remaining_text:
+        if len(remaining_text) <= max_chunk_length:
+            # Remaining text fits in one chunk
+            chunks.append(remaining_text.strip())
+            break
+            
+        # Find best break point within max_chunk_length
+        best_break = -1
+        best_break_priority = -1
+        
+        # Look for natural breaks in priority order
+        for i, break_char in enumerate(natural_breaks):
+            # Search backward from max_chunk_length for this break type
+            search_text = remaining_text[:max_chunk_length + 10]  # Small buffer
+            break_pos = search_text.rfind(break_char)
+            
+            if break_pos > 20:  # Don't break too early (min 20 chars)
+                if best_break_priority == -1 or i < best_break_priority:
+                    best_break = break_pos + len(break_char)
+                    best_break_priority = i
+        
+        # If no natural break found, break at last space within limit
+        if best_break == -1:
+            search_text = remaining_text[:max_chunk_length]
+            last_space = search_text.rfind(' ')
+            if last_space > 15:  # Don't break mid-word unless absolutely necessary
+                best_break = last_space
             else:
-                current_chunk = sentence
+                best_break = max_chunk_length  # Force break if needed
+        
+        # Extract chunk and continue
+        chunk = remaining_text[:best_break].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining_text = remaining_text[best_break:].strip()
+
+    # 🚀 SMOOTH FLOW: Add subtle continuation markers for TTS context
+    processed_chunks = []
+    for i, chunk in enumerate(chunks):
+        if i < len(chunks) - 1:
+            # Add ellipsis for smoother TTS continuation (Kokoro handles this well)
+            if not chunk.endswith(('.', '!', '?')):
+                processed_chunks.append(chunk + "...")
+            else:
+                processed_chunks.append(chunk)
         else:
-            # Start new chunk
-            if current_chunk:
-                chunks.append(current_chunk)
-            current_chunk = sentence
-
-    # Add remaining chunk
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    # If no chunks created, split by words as fallback
-    if not chunks and text:
-        words = text.split()
-        current_chunk = ""
-
-        for word in words:
-            if len(current_chunk + " " + word) <= max_chunk_length or not current_chunk:
-                if current_chunk:
-                    current_chunk += " " + word
-                else:
-                    current_chunk = word
-            else:
-                chunks.append(current_chunk)
-                current_chunk = word
-
-        if current_chunk:
-            chunks.append(current_chunk)
+            processed_chunks.append(chunk)
 
     logger.info(
-        f"📝 Chunked response into {len(chunks)} pieces: {[len(chunk) for chunk in chunks]} chars each"
+        f"🚀 SMART CHUNKED: {len(processed_chunks)} natural phrases ({[len(chunk) for chunk in processed_chunks[:3]]}{'...' if len(processed_chunks) > 3 else ''} chars each)"
     )
-    return chunks
+    return processed_chunks
 
 
 class AudioSession:
@@ -277,23 +281,44 @@ class AudioSession:
         # 📊 METRICS INTEGRATION - Connect voice pipeline to dashboard
         self._metrics_service = get_metrics_service()
         self._timing_data = {}  # Store timing data for complete conversation turn logging
+        
+        # 🚀 PHASE 2B: PROGRESSIVE STREAMING - Real-time processing while speaking
+        self._progressive_streaming_enabled = True  # Enable progressive streaming by default
+        self._progressive_stream_handler = None  # Active progressive stream
+        self._progressive_transcript = ""  # Accumulated transcript from progressive stream
+        self._early_llm_trigger_sent = False  # Flag to prevent duplicate early triggers
+        self._progressive_confidence_threshold = 0.8  # Threshold for early LLM processing
+        self._min_progressive_length = 10  # Minimum characters before early trigger
+        
+        # 🚀 PHASE 2C: LLM TOKEN STREAMING - Real-time response generation
+        self._llm_streaming_enabled = True  # Enable LLM token streaming
+        self._current_llm_stream = None  # Active LLM stream
+        self._llm_response_buffer = ""  # Accumulated response from LLM stream
+        self._sentence_boundary_chars = ".!?,"  # Smart chunking: comma boundaries
+        self._min_sentence_length = 12  # 🚀 BALANCED: 12 chars (up from 8, down from 15)
+        self._streaming_tts_tasks = []  # Track parallel TTS generation tasks
+        self._response_chunk_counter = 0  # Counter for response chunks
 
     async def initialize(self):
         """Initialize all services for this session"""
         logger.info(f"🚀 STARTING AudioSession.initialize() for session {self.session_id}")
         try:
-            # STT Service - Direct Deepgram (no LiveKit context needed)
+            # STT Service - Direct Deepgram with streaming capabilities enabled
             logger.info(f"🎧 Creating STT service for session {self.session_id}")
             self.stt_service = DirectDeepgramSTTService(
                 {
                     "model": "nova-2",
                     "language": "en-US",
                     "punctuate": True,
-                    "interim_results": False,
+                    "interim_results": True,  # Enable streaming mode
+                    "streaming_enabled": True,  # Enable WebSocket streaming
+                    "progressive_streaming": self._progressive_streaming_enabled,  # 🚀 PHASE 2B
+                    "chunk_duration_ms": 250,  # 250ms progressive chunks
+                    "early_processing_threshold": self._progressive_confidence_threshold,  # Early LLM trigger
                 }
             )
             await self.stt_service.initialize()
-            logger.info(f"✅ STT service initialized for session {self.session_id}")
+            logger.info(f"✅ STT service initialized for session {self.session_id} with streaming enabled")
 
             # LLM Service - Fixed OpenAI adapter
             logger.info(f"🧠 Creating LLM service for session {self.session_id}")
@@ -600,127 +625,43 @@ class AudioSession:
                 )
                 return None
 
-            # 🎯 ADAPTIVE BUFFERING: Smart buffer processing with speed/accuracy balance
+            # 🚀 PHASE 2B: PROGRESSIVE STREAMING - Process while user is speaking
+            if self._progressive_streaming_enabled and not self._progressive_stream_handler:
+                # Start progressive stream on first audio chunk
+                await self._start_progressive_stream(websocket)
+                
+            # Send audio chunk to progressive stream
+            if self._progressive_stream_handler:
+                progressive_result = await self._send_to_progressive_stream(audio_data, websocket, current_time)
+                if progressive_result:
+                    chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
+                    self._track_performance_metric("progressive_processing_time", chunk_duration_ms)
+                    logger.info(f"🚀 Progressive streaming completed: {chunk_duration_ms:.2f}ms")
+                    return progressive_result
+
+            # 🚀 PHASE 2A: TRY STREAMING FIRST, FALL BACK TO BATCH (Fallback)
             buffer_size = len(self._audio_buffer)
+            
+            # Use streaming for small chunks (real-time processing)
+            if buffer_size >= 8000:  # 500ms at 16kHz
+                logger.debug(f"🚀 Attempting streaming transcription for {buffer_size} bytes")
+                
+                # Try streaming transcription first
+                streaming_result = await self._process_audio_streaming(websocket, current_time)
+                if streaming_result:
+                    chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
+                    self._track_performance_metric("streaming_processing_time", chunk_duration_ms)
+                    logger.info(f"🚀 Streaming transcription successful: {chunk_duration_ms:.2f}ms")
+                    return streaming_result
+
+            # 🎯 ADAPTIVE BUFFERING: Smart buffer processing with speed/accuracy balance (FALLBACK)
             should_process, process_reason, processing_mode = self._should_process_buffer(
                 buffer_size, current_time
             )
 
             if should_process:
-                # Track transcription attempt
-                self._track_performance_metric("transcription_attempted")
-
-                # 🛡️ RELIABILITY: Use state tracking for watchdog
-                self._set_state("PROCESSING")
-
-                # Get raw audio bytes from buffer
-                audio_bytes = bytes(self._audio_buffer)
-
-                # Clear buffer
-                self._audio_buffer.clear()
-
-                # Reset processing flag for next audio chunk
-                self._processing_audio = False
-
-                # Get adaptive timeout based on processing mode
-                timeout_seconds = self._get_processing_timeout(processing_mode)
-
-                # logger.info(
-                #     f"📝 Processing audio buffer: {process_reason} (mode: {processing_mode}, timeout: {timeout_seconds}s)"
-                # )
-
-                # 🛡️ RELIABILITY: Critical operation with adaptive timeout protection
-                try:
-                    # Convert raw PCM to WAV format for Deepgram
-                    wav_audio = pcm_to_wav(
-                        audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16
-                    )
-
-                    # Send transcription start event (check connection first)
-                    if websocket.client_state == WebSocketState.CONNECTED:
-                        await websocket.send_json(
-                            {
-                                "type": "transcription_partial",
-                                "text": "",
-                                "message": "Processing your speech...",
-                                "buffer_size": len(audio_bytes),
-                                "conversation_state": self.conversation_state,
-                                "processing_mode": processing_mode,
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-                    logger.info("📝 BACKEND UNDERSTANDING: Processing speech...")
-
-                    # 🛡️ CRITICAL: STT call with adaptive timeout
-                    logger.debug(
-                        f"🛡️ Starting STT transcription (mode: {processing_mode}, timeout: {timeout_seconds}s)..."
-                    )
-                    
-                    # 📊 METRICS: Capture STT timing
-                    stt_start_time = time.perf_counter()
-                    transcription = await asyncio.wait_for(
-                        self.stt_service.transcribe_audio_bytes(wav_audio), timeout=timeout_seconds
-                    )
-                    stt_duration_ms = (time.perf_counter() - stt_start_time) * 1000
-                    self._timing_data['stt_latency_ms'] = stt_duration_ms
-                    
-                    logger.debug(f"🛡️ STT transcription completed in {stt_duration_ms:.1f}ms")
-
-                    if transcription and transcription.strip():
-                        # Send complete transcription (check connection first)
-                        if websocket.client_state == WebSocketState.CONNECTED:
-                            await websocket.send_json(
-                                {
-                                    "type": "transcription_complete",
-                                    "text": transcription.strip(),
-                                    "buffer_size": len(audio_bytes),
-                                    "conversation_state": self.conversation_state,
-                                    "timestamp": datetime.now().isoformat(),
-                                }
-                            )
-                        logger.info(f"✅ BACKEND UNDERSTOOD: '{transcription}'")
-                        logger.info(f"👤 User ({self.character}): '{transcription}'")
-
-                        # Increment conversation turn
-                        self.conversation_turn_count += 1
-                        logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
-
-                        # 🛡️ RELIABILITY: Return to safe state BEFORE returning result
-                        self._set_state("LISTENING")
-
-                        # Performance logging
-                        chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
-                        self._track_performance_metric("full_processing_time", chunk_duration_ms)
-                        logger.info(f"🔍 Full processing: {chunk_duration_ms:.2f}ms")
-
-                        return transcription.strip()
-                    else:
-                        # Send empty transcription result (check connection first)
-                        if websocket.client_state == WebSocketState.CONNECTED:
-                            await websocket.send_json(
-                                {
-                                    "type": "transcription_complete",
-                                    "text": "",
-                                    "message": "No speech detected in audio",
-                                    "buffer_size": len(audio_bytes),
-                                    "conversation_state": self.conversation_state,
-                                    "timestamp": datetime.now().isoformat(),
-                                }
-                            )
-                        logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
-
-                        # 🛡️ RELIABILITY: Return to safe state
-                        self._set_state("LISTENING")
-
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f"🛡️ STT timeout after {timeout_seconds}s (mode: {processing_mode}) - forcing reset"
-                    )
-                    self._force_reset_state("LISTENING", f"stt_timeout_{processing_mode}")
-
-                except Exception as stt_error:
-                    logger.error(f"🛡️ STT processing failed: {stt_error}")
-                    self._force_reset_state("LISTENING", f"stt_error: {stt_error}")
+                logger.debug(f"🔄 Falling back to batch transcription: {process_reason}")
+                return await self._process_audio_batch(websocket, processing_mode, current_time, chunk_start_time)
 
             # Performance logging for VAD-only processing
             chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
@@ -753,6 +694,739 @@ class AudioSession:
                 self._set_state("LISTENING")
 
         return None
+
+    # ===== PHASE 2B: PROGRESSIVE STREAMING METHODS =====
+    
+    async def _start_progressive_stream(self, websocket: WebSocket) -> bool:
+        """
+        Start progressive streaming for real-time transcription while user speaks.
+        """
+        try:
+            if not self.stt_service:
+                return False
+                
+            # Create progressive stream handler
+            self._progressive_stream_handler = await self.stt_service.start_progressive_stream(
+                on_partial_result=lambda text, confidence, early_trigger: asyncio.create_task(
+                    self._handle_progressive_partial(websocket, text, confidence, early_trigger)
+                ),
+                on_final_result=lambda text, confidence: asyncio.create_task(
+                    self._handle_progressive_final(websocket, text, confidence)  
+                ),
+                confidence_threshold=self._progressive_confidence_threshold
+            )
+            
+            if self._progressive_stream_handler:
+                logger.info("🚀 Progressive streaming started - processing while speaking!")
+                
+                # Send progressive stream start event
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json({
+                        "type": "progressive_stream_started",
+                        "message": "Processing speech in real-time...",
+                        "conversation_state": self.conversation_state,
+                        "timestamp": datetime.now().isoformat(),
+                    })
+                
+                return True
+            else:
+                logger.warning("⚠️ Failed to start progressive streaming")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error starting progressive stream: {e}")
+            return False
+    
+    async def _send_to_progressive_stream(self, audio_data: bytes, websocket: WebSocket, current_time: float) -> Optional[str]:
+        """
+        Send audio chunk to progressive stream and handle real-time results.
+        """
+        try:
+            if not self._progressive_stream_handler:
+                return None
+                
+            # Send audio chunk to progressive stream
+            success = await self._progressive_stream_handler.send_audio_chunk(audio_data)
+            
+            if not success:
+                logger.warning("⚠️ Failed to send chunk to progressive stream")
+                await self._cleanup_progressive_stream()
+                return None
+            
+            # Check if we should finalize the stream based on silence detection
+            if self._should_finalize_progressive_stream(current_time):
+                return await self._finalize_progressive_stream(websocket)
+                
+            return None  # Continue progressive processing
+            
+        except Exception as e:
+            logger.error(f"❌ Error in progressive streaming: {e}")
+            await self._cleanup_progressive_stream()
+            return None
+    
+    async def _handle_progressive_partial(self, websocket: WebSocket, text: str, confidence: float, early_trigger: bool):
+        """
+        Handle partial results from progressive streaming.
+        """
+        try:
+            # Update accumulated transcript
+            self._progressive_transcript = text
+            
+            # Send partial result to client
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "progressive_partial",
+                    "text": text,
+                    "confidence": confidence,
+                    "early_trigger": early_trigger,
+                    "conversation_state": self.conversation_state,
+                    "timestamp": datetime.now().isoformat(),
+                })
+            
+            # Handle early LLM trigger for super-fast responses
+            if early_trigger and not self._early_llm_trigger_sent:
+                self._early_llm_trigger_sent = True
+                logger.info(f"🚀 EARLY LLM TRIGGER: '{text}' (confidence: {confidence:.2f})")
+                
+                # Start LLM processing early while user is still speaking!
+                asyncio.create_task(self._process_early_llm_response(websocket, text))
+                
+        except Exception as e:
+            logger.error(f"❌ Error handling progressive partial: {e}")
+    
+    async def _handle_progressive_final(self, websocket: WebSocket, text: str, confidence: float):
+        """
+        Handle final results from progressive streaming.
+        """
+        try:
+            # Update final transcript
+            self._progressive_transcript = text
+            
+            # Send final result to client
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "progressive_final",
+                    "text": text,
+                    "confidence": confidence,
+                    "conversation_state": self.conversation_state,
+                    "timestamp": datetime.now().isoformat(),
+                })
+                
+            logger.info(f"🎯 Progressive final: '{text}' (confidence: {confidence:.2f})")
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling progressive final: {e}")
+    
+    async def _should_finalize_progressive_stream(self, current_time: float) -> bool:
+        """
+        Check if progressive stream should be finalized based on silence detection.
+        """
+        # Finalize if we haven't detected speech in a while (silence detected)
+        silence_duration = current_time - self._last_speech_time
+        return silence_duration > (self._adaptive_buffer_config["silence_detection_ms"] / 1000)
+    
+    async def _finalize_progressive_stream(self, websocket: WebSocket) -> Optional[str]:
+        """
+        Finalize the progressive stream and return the complete transcript.
+        """
+        try:
+            if not self._progressive_stream_handler:
+                return self._progressive_transcript
+                
+            # Finalize the stream
+            final_transcript = await self._progressive_stream_handler.finalize_stream()
+            
+            # Clean up
+            await self._cleanup_progressive_stream()
+            
+            # Send finalization event
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "progressive_stream_finalized", 
+                    "text": final_transcript or self._progressive_transcript,
+                    "conversation_state": self.conversation_state,
+                    "timestamp": datetime.now().isoformat(),
+                })
+            
+            result = final_transcript or self._progressive_transcript
+            logger.info(f"🏁 Progressive stream finalized: '{result}'")
+            
+            return result.strip() if result else None
+            
+        except Exception as e:
+            logger.error(f"❌ Error finalizing progressive stream: {e}")
+            await self._cleanup_progressive_stream()
+            return self._progressive_transcript.strip() if self._progressive_transcript else None
+    
+    async def _cleanup_progressive_stream(self):
+        """Clean up progressive stream resources."""
+        try:
+            if self._progressive_stream_handler:
+                await self._progressive_stream_handler.close()
+            
+            self._progressive_stream_handler = None
+            self._progressive_transcript = ""
+            self._early_llm_trigger_sent = False
+            
+            logger.debug("🧹 Progressive stream cleaned up")
+            
+        except Exception as e:
+            logger.error(f"❌ Error cleaning up progressive stream: {e}")
+    
+    async def _cleanup_llm_streaming(self):
+        """Clean up LLM streaming resources."""
+        try:
+            # Cancel any pending TTS tasks
+            if self._streaming_tts_tasks:
+                for task in self._streaming_tts_tasks:
+                    if not task.done():
+                        task.cancel()
+                self._streaming_tts_tasks.clear()
+            
+            # Reset streaming state
+            self._current_llm_stream = None
+            self._llm_response_buffer = ""
+            self._response_chunk_counter = 0
+            
+            logger.debug("🧹 LLM streaming resources cleaned up")
+            
+        except Exception as e:
+            logger.error(f"❌ Error cleaning up LLM streaming: {e}")
+    
+    async def _process_early_llm_response(self, websocket: WebSocket, partial_text: str):
+        """
+        Process LLM response early while user is still speaking (Phase 2C preview).
+        
+        This method starts LLM processing on partial transcription for ultra-fast responses.
+        """
+        try:
+            logger.info(f"🧠 EARLY LLM PROCESSING: '{partial_text}'")
+            
+            # For now, just log this capability - full implementation in Phase 2C
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "early_llm_triggered",
+                    "partial_text": partial_text,
+                    "message": "AI is already thinking about your response...",
+                    "timestamp": datetime.now().isoformat(),
+                })
+            
+            # TODO: Phase 2C - Implement actual early LLM processing
+            # This would start generating response before speech is complete
+            
+        except Exception as e:
+            logger.error(f"❌ Error in early LLM processing: {e}")
+
+    # ===== PHASE 2C: LLM TOKEN STREAMING METHODS =====
+    
+    async def _process_llm_streaming_response(self, websocket: WebSocket, user_input: str):
+        """
+        🚀 PHASE 2C: Process LLM response with token streaming and real-time TTS.
+        
+        This creates a true streaming pipeline:
+        1. LLM tokens stream in real-time
+        2. Sentence boundaries trigger immediate TTS processing  
+        3. Audio chunks stream as they're ready
+        4. Total latency: First audio in ~200ms instead of 3500ms
+        """
+        llm_start_time = time.perf_counter()
+        first_token_received = False
+        first_token_time = None
+        
+        try:
+            # Initialize streaming state
+            self._llm_response_buffer = ""
+            self._streaming_tts_tasks = []
+            self._response_chunk_counter = 0
+            
+            # Get character personality for context
+            from spiritual_voice_agent.characters.character_factory import CharacterFactory
+            character = CharacterFactory.create_character(self.character)
+            
+            # Create conversation context
+            messages = [{"role": "system", "content": character.personality}]
+            
+            # Add recent conversation history
+            for msg in self.conversation_history[-10:]:  # Last 5 exchanges
+                messages.append(msg)
+                
+            # Add current user input
+            messages.append({"role": "user", "content": user_input})
+            
+            # 📊 METRICS: Track LLM first token latency
+            logger.info("🚀 Starting LLM token streaming...")
+            
+            # Start LLM streaming using direct service call
+            if not self.llm_service:
+                raise Exception("LLM service not initialized")
+                
+            # Convert messages to proper format for LLM service
+            context = messages[:-1]  # All except last user message
+            prompt = user_input
+            
+            # Start streaming generation
+            token_stream = self.llm_service.generate_stream(
+                prompt=prompt,
+                context=context,
+                temperature=0.7,
+                max_tokens=500
+            )
+            
+            # Send streaming start notification
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "llm_streaming_started",
+                    "message": "AI is generating response in real-time...",
+                    "conversation_state": self.conversation_state,
+                    "timestamp": datetime.now().isoformat(),
+                })
+            
+            # Process tokens as they arrive
+            sentence_buffer = ""
+            
+            async for token in token_stream:
+                # Check for interruption
+                if self._stream_cancelled:
+                    logger.info("🎯 LLM streaming cancelled due to interruption")
+                    break
+                
+                # Skip empty tokens (normal OpenAI streaming behavior)
+                if not token or not token.strip():
+                    continue
+                    
+                # Track first token timing
+                if not first_token_received:
+                    first_token_received = True
+                    first_token_time = time.perf_counter()
+                    first_token_latency = (first_token_time - llm_start_time) * 1000
+                    self._timing_data['llm_first_token_ms'] = first_token_latency
+                    logger.info(f"🚀 FIRST TOKEN: {first_token_latency:.1f}ms - {repr(token)}")
+                
+                # Accumulate token
+                self._llm_response_buffer += token
+                sentence_buffer += token
+                
+                # Send token to client for real-time display
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json({
+                        "type": "llm_token",
+                        "content": token,
+                        "accumulated_text": self._llm_response_buffer,
+                        "timestamp": datetime.now().isoformat(),
+                    })
+                
+                                # Check for sentence boundaries
+                if self._has_sentence_boundary(sentence_buffer):
+                    # Extract complete sentence(s)
+                    sentences = self._extract_complete_sentences(sentence_buffer)
+                    
+                    for sentence in sentences:
+                        if len(sentence.strip()) >= self._min_sentence_length:
+                            # Start TTS processing immediately
+                            task = asyncio.create_task(
+                                self._process_streaming_tts_chunk(websocket, sentence.strip())
+                            )
+                            self._streaming_tts_tasks.append(task)
+                    
+                    # Keep remaining partial sentence
+                    sentence_buffer = self._get_remaining_partial_sentence(sentence_buffer)
+            
+            # Process final partial sentence if it exists
+            if sentence_buffer.strip() and len(sentence_buffer.strip()) >= 5:
+                task = asyncio.create_task(
+                    self._process_streaming_tts_chunk(websocket, sentence_buffer.strip())
+                )
+                self._streaming_tts_tasks.append(task)
+            
+            # Update conversation history
+            self.conversation_history.append({"role": "user", "content": user_input})
+            self.conversation_history.append({"role": "assistant", "content": self._llm_response_buffer})
+            
+            # Calculate total LLM streaming time
+            total_llm_time = (time.perf_counter() - llm_start_time) * 1000
+            self._timing_data['llm_total_streaming_ms'] = total_llm_time
+            
+            # Send streaming complete notification
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "llm_streaming_complete",
+                    "full_response": self._llm_response_buffer,
+                    "total_time_ms": total_llm_time,
+                    "first_token_ms": self._timing_data.get('llm_first_token_ms', 0),
+                    "pending_tts_chunks": len(self._streaming_tts_tasks),
+                    "timestamp": datetime.now().isoformat(),
+                })
+                
+            logger.info(f"🚀 LLM streaming complete: {total_llm_time:.1f}ms total, first token: {self._timing_data.get('llm_first_token_ms', 0):.1f}ms")
+            
+            # Wait for all TTS chunks to complete
+            if self._streaming_tts_tasks:
+                logger.info(f"🎵 Waiting for {len(self._streaming_tts_tasks)} TTS tasks to complete...")
+                await asyncio.gather(*self._streaming_tts_tasks, return_exceptions=True)
+                logger.info("🎵 All streaming TTS chunks completed")
+            
+            # Return to listening state
+            self._set_state("LISTENING")
+            
+        except Exception as e:
+            logger.error(f"❌ LLM streaming error: {e}")
+            self._force_reset_state("LISTENING", f"llm_streaming_error: {e}")
+            
+            # Send error notification
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "llm_streaming_error",
+                    "error": str(e),
+                    "timestamp": datetime.now().isoformat(),
+                })
+    
+    def _has_sentence_boundary(self, text: str) -> bool:
+        """Check if text contains sentence boundary characters"""
+        return any(char in text for char in self._sentence_boundary_chars)
+    
+    def _extract_complete_sentences(self, text: str) -> list[str]:
+        """Extract complete sentences from text buffer"""
+        sentences = []
+        current_sentence = ""
+        
+        for char in text:
+            current_sentence += char
+            if char in self._sentence_boundary_chars:
+                sentences.append(current_sentence)
+                current_sentence = ""
+        
+        return sentences
+    
+    def _get_remaining_partial_sentence(self, text: str) -> str:
+        """Get the partial sentence remaining after extracting complete ones"""
+        for i in range(len(text) - 1, -1, -1):
+            if text[i] in self._sentence_boundary_chars:
+                return text[i + 1:] if i + 1 < len(text) else ""
+        return text
+    
+    async def _process_streaming_tts_chunk(self, websocket: WebSocket, sentence: str):
+        """
+        🚀 PHASE 2C: Process individual sentence for TTS streaming.
+        
+        This runs in parallel to continue receiving LLM tokens while processing TTS.
+        """
+        chunk_start_time = time.perf_counter()
+        chunk_id = self._response_chunk_counter
+        self._response_chunk_counter += 1
+        
+        try:
+            logger.info(f"🎵 TTS Chunk {chunk_id}: Starting synthesis for '{sentence[:50]}...'")
+            
+            # Send TTS start notification
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "tts_chunk_started",
+                    "chunk_id": chunk_id,
+                    "text": sentence,
+                    "conversation_state": self.conversation_state,
+                    "timestamp": datetime.now().isoformat(),
+                })
+            
+            # Generate TTS for this sentence
+            tts_start_time = time.perf_counter()
+            audio_data = await self.synthesize_speech_chunk(sentence)
+            tts_duration_ms = (time.perf_counter() - tts_start_time) * 1000
+            
+            if audio_data:
+                # Send audio chunk immediately
+                audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+                
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json({
+                        "type": "streaming_audio_chunk",
+                        "chunk_id": chunk_id,
+                        "text": sentence,
+                        "audio": audio_base64,
+                        "audio_size": len(audio_data),
+                        "tts_latency_ms": tts_duration_ms,
+                        "conversation_state": self.conversation_state,
+                        "timestamp": datetime.now().isoformat(),
+                    })
+                
+                total_chunk_time = (time.perf_counter() - chunk_start_time) * 1000
+                logger.info(f"🎵 TTS Chunk {chunk_id}: Completed in {total_chunk_time:.1f}ms (TTS: {tts_duration_ms:.1f}ms)")
+                
+                # Track TTS timing for first chunk
+                if chunk_id == 0:
+                    self._timing_data['tts_first_chunk_ms'] = tts_duration_ms
+                
+            else:
+                logger.warning(f"⚠️ TTS Chunk {chunk_id}: No audio generated")
+                
+        except Exception as e:
+            logger.error(f"❌ TTS Chunk {chunk_id} error: {e}")
+            
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "tts_chunk_error",
+                    "chunk_id": chunk_id,
+                    "error": str(e),
+                    "timestamp": datetime.now().isoformat(),
+                })
+
+    # ===== NEW STREAMING PROCESSING METHOD (PHASE 2A) =====
+    
+    async def _process_audio_streaming(self, websocket: WebSocket, current_time: float) -> Optional[str]:
+        """
+        Process audio using streaming STT for real-time transcription.
+        
+        Returns transcription if successful, None if should fall back to batch.
+        """
+        try:
+            # Track streaming attempt
+            self._track_performance_metric("streaming_attempted")
+            
+            # 🛡️ RELIABILITY: Use state tracking for watchdog
+            self._set_state("PROCESSING")
+            
+            # Get current audio buffer (don't clear yet)
+            audio_bytes = bytes(self._audio_buffer)
+            
+            # Send processing start event
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json(
+                    {
+                        "type": "transcription_partial",
+                        "text": "",
+                        "message": "Processing your speech (streaming)...",
+                        "buffer_size": len(audio_bytes),
+                        "conversation_state": self.conversation_state,
+                        "processing_mode": "streaming",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+            logger.info("🚀 STREAMING: Processing speech in real-time...")
+            
+            # Convert raw PCM to WAV format for streaming
+            wav_audio = pcm_to_wav(
+                audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16
+            )
+            
+            # Prepare streaming callbacks
+            partial_results = []
+            final_result = None
+            
+            def on_partial(text: str, confidence: float):
+                """Handle partial transcription results"""
+                partial_results.append((text, confidence))
+                logger.debug(f"🔄 Partial: '{text}' ({confidence:.2f})")
+                
+                # Send partial result to client (non-blocking)
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    asyncio.create_task(websocket.send_json({
+                        "type": "transcription_partial",
+                        "text": text,
+                        "confidence": confidence,
+                        "is_interim": True,
+                        "timestamp": datetime.now().isoformat(),
+                    }))
+            
+            def on_final(text: str, confidence: float):
+                """Handle final transcription result"""
+                nonlocal final_result
+                final_result = (text, confidence)
+                logger.debug(f"🎯 Final: '{text}' ({confidence:.2f})")
+            
+            # 📊 METRICS: Capture STT timing
+            stt_start_time = time.perf_counter()
+            
+            # Call streaming transcription with callbacks
+            transcription = await asyncio.wait_for(
+                self.stt_service.transcribe_audio_stream(
+                    wav_audio,
+                    on_partial_result=on_partial,
+                    on_final_result=on_final,
+                    confidence_threshold=0.7  # Lower threshold for streaming
+                ),
+                timeout=5.0  # Shorter timeout for streaming
+            )
+            
+            stt_duration_ms = (time.perf_counter() - stt_start_time) * 1000
+            self._timing_data['stt_latency_ms'] = stt_duration_ms
+            
+            logger.debug(f"🚀 Streaming STT completed in {stt_duration_ms:.1f}ms")
+            
+            if transcription and transcription.strip():
+                # Clear buffer only on successful transcription
+                self._audio_buffer.clear()
+                
+                # Reset processing flag
+                self._processing_audio = False
+                
+                # Send complete transcription
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json(
+                        {
+                            "type": "transcription_complete",
+                            "text": transcription.strip(),
+                            "buffer_size": len(audio_bytes),
+                            "conversation_state": self.conversation_state,
+                            "processing_mode": "streaming",
+                            "stt_latency_ms": stt_duration_ms,
+                            "partial_results_count": len(partial_results),
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+                
+                logger.info(f"✅ STREAMING SUCCESS: '{transcription}' in {stt_duration_ms:.1f}ms")
+                logger.info(f"👤 User ({self.character}): '{transcription}'")
+                
+                # Increment conversation turn
+                self.conversation_turn_count += 1
+                logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
+                
+                # Track streaming success
+                self._track_performance_metric("streaming_success")
+                
+                # 🛡️ RELIABILITY: Return to safe state BEFORE returning result
+                self._set_state("LISTENING")
+                
+                return transcription.strip()
+            else:
+                # No transcription - let batch method try
+                logger.debug("🔄 Streaming returned no results, will try batch processing")
+                self._track_performance_metric("streaming_no_result")
+                self._set_state("LISTENING")
+                return None
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"🚀 Streaming timeout after 5s - falling back to batch")
+            self._track_performance_metric("streaming_timeout")
+            self._set_state("LISTENING") 
+            return None
+            
+        except Exception as e:
+            logger.warning(f"🚀 Streaming error: {e} - falling back to batch")
+            self._track_performance_metric("streaming_error")
+            self._set_state("LISTENING")
+            return None
+
+    # ===== EXISTING BATCH PROCESSING METHOD (REFACTORED) =====
+    
+    async def _process_audio_batch(self, websocket: WebSocket, processing_mode: str, current_time: float, chunk_start_time: float) -> Optional[str]:
+        """
+        Process audio using batch STT (existing method, refactored for clarity).
+        """
+        try:
+            # Track transcription attempt
+            self._track_performance_metric("transcription_attempted")
+
+            # 🛡️ RELIABILITY: Use state tracking for watchdog
+            self._set_state("PROCESSING")
+
+            # Get raw audio bytes from buffer
+            audio_bytes = bytes(self._audio_buffer)
+
+            # Clear buffer
+            self._audio_buffer.clear()
+
+            # Reset processing flag for next audio chunk
+            self._processing_audio = False
+
+            # Get adaptive timeout based on processing mode
+            timeout_seconds = self._get_processing_timeout(processing_mode)
+
+            # Convert raw PCM to WAV format for Deepgram
+            wav_audio = pcm_to_wav(
+                audio_bytes, sample_rate=16000, num_channels=1, bit_depth=16
+            )
+
+            # Send transcription start event (check connection first)
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json(
+                    {
+                        "type": "transcription_partial",
+                        "text": "",
+                        "message": "Processing your speech (batch)...",
+                        "buffer_size": len(audio_bytes),
+                        "conversation_state": self.conversation_state,
+                        "processing_mode": processing_mode,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+            logger.info("📝 BATCH: Processing speech...")
+
+            # 🛡️ CRITICAL: STT call with adaptive timeout
+            logger.debug(
+                f"🛡️ Starting batch STT transcription (mode: {processing_mode}, timeout: {timeout_seconds}s)..."
+            )
+            
+            # 📊 METRICS: Capture STT timing
+            stt_start_time = time.perf_counter()
+            transcription = await asyncio.wait_for(
+                self.stt_service.transcribe_audio_bytes(wav_audio), timeout=timeout_seconds
+            )
+            stt_duration_ms = (time.perf_counter() - stt_start_time) * 1000
+            self._timing_data['stt_latency_ms'] = stt_duration_ms
+            
+            logger.debug(f"🛡️ Batch STT transcription completed in {stt_duration_ms:.1f}ms")
+
+            if transcription and transcription.strip():
+                # Send complete transcription (check connection first)
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json(
+                        {
+                            "type": "transcription_complete",
+                            "text": transcription.strip(),
+                            "buffer_size": len(audio_bytes),
+                            "conversation_state": self.conversation_state,
+                            "processing_mode": processing_mode,
+                            "stt_latency_ms": stt_duration_ms,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+                logger.info(f"✅ BATCH SUCCESS: '{transcription}' in {stt_duration_ms:.1f}ms")
+                logger.info(f"👤 User ({self.character}): '{transcription}'")
+
+                # Increment conversation turn
+                self.conversation_turn_count += 1
+                logger.info(f"🔄 Conversation turn #{self.conversation_turn_count}")
+
+                # 🛡️ RELIABILITY: Return to safe state BEFORE returning result
+                self._set_state("LISTENING")
+
+                # Performance logging
+                chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
+                self._track_performance_metric("full_processing_time", chunk_duration_ms)
+                logger.info(f"🔍 Full processing: {chunk_duration_ms:.2f}ms")
+
+                return transcription.strip()
+            else:
+                # Send empty transcription result (check connection first)
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json(
+                        {
+                            "type": "transcription_complete",
+                            "text": "",
+                            "message": "No speech detected in audio",
+                            "buffer_size": len(audio_bytes),
+                            "conversation_state": self.conversation_state,
+                            "processing_mode": processing_mode,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+                logger.info(f"🔇 No speech in {len(audio_bytes)} bytes of audio")
+
+                # 🛡️ RELIABILITY: Return to safe state
+                self._set_state("LISTENING")
+                return None
+
+        except asyncio.TimeoutError:
+            logger.error(
+                f"🛡️ Batch STT timeout after {timeout_seconds}s (mode: {processing_mode}) - forcing reset"
+            )
+            self._force_reset_state("LISTENING", f"stt_timeout_{processing_mode}")
+            return None
+
+        except Exception as stt_error:
+            logger.error(f"🛡️ Batch STT processing failed: {stt_error}")
+            self._force_reset_state("LISTENING", f"stt_error: {stt_error}")
+            return None
 
     def _calculate_audio_energy(self, audio_data: bytes) -> float:
         """Calculate the energy/volume of audio data to detect speech vs silence"""
@@ -1419,6 +2093,9 @@ class AudioSession:
 
     async def process_and_stream_response(self, websocket: WebSocket, user_input: str):
         """Generate AI response and stream audio chunks in real-time"""
+        print("DEBUG: process_and_stream_response method started")
+        logger.info(f"🚀 PHASE 2C ENTRY: process_and_stream_response called with input: '{user_input}'")
+        
         # 🛡️ RELIABILITY: Track websocket for watchdog notifications
         self._current_websocket = websocket
 
@@ -1460,9 +2137,18 @@ class AudioSession:
                 f"🤖 Processing started with {self.character} (Turn #{self.conversation_turn_count})"
             )
 
-            # 🛡️ CRITICAL: LLM call with aggressive timeout protection
+            # 🚀 PHASE 2C: LLM TOKEN STREAMING - Real-time response generation
+            logger.info(f"🚀 PHASE 2C DEBUG: _llm_streaming_enabled = {self._llm_streaming_enabled}")
+            if self._llm_streaming_enabled:
+                logger.info("🚀 PHASE 2C: Starting LLM token streaming for real-time response")
+                await self._process_llm_streaming_response(websocket, user_input)
+                return
+            else:
+                logger.info("🚀 PHASE 2C: LLM streaming disabled, using batch mode")
+            
+            # 🛡️ FALLBACK: Batch LLM processing (if streaming disabled)
             try:
-                logger.debug(f"🛡️ Starting LLM generation...")
+                logger.debug(f"🛡️ Starting LLM generation (batch mode)...")
                 
                 # 📊 METRICS: Capture LLM timing
                 llm_start_time = time.perf_counter()
@@ -1484,7 +2170,7 @@ class AudioSession:
                 return
 
             # Split response into chunks
-            chunks = chunk_ai_response(response_text, max_chunk_length=120)
+            chunks = chunk_ai_response(response_text, max_chunk_length=50)  # 🚀 SMART CHUNKING: Use 50-char natural phrases
 
             if not chunks:
                 logger.warning("⚠️ No chunks generated from AI response")
@@ -1762,6 +2448,12 @@ class AudioSession:
                 if not task.done():
                     task.cancel()
             self._cleanup_queue.clear()
+            
+            # 🚀 PHASE 2B: Clean up progressive streaming
+            await self._cleanup_progressive_stream()
+            
+            # 🚀 PHASE 2C: Clean up LLM streaming
+            await self._cleanup_llm_streaming()
 
             # Shutdown services
             if self.stt_service:
@@ -1997,6 +2689,8 @@ async def handle_json_message(
 ) -> Optional[AudioSession]:
     """Handle JSON messages from client"""
     message_type = message.get("type")
+    logger.info(f"🚀 PHASE 2C DEBUG: handle_json_message called with type: {message_type}")
+    logger.info(f"🚀 PHASE 2C DEBUG: Full message: {message}")
 
     try:
         if message_type == "initialize":
@@ -2168,10 +2862,24 @@ async def handle_json_message(
 
         elif message_type == "text_message":
             # Handle text-only message (no audio) - stream chunks too
+            logger.info(f"🚀 PHASE 2C: Received text_message with type: {message_type}")
             if session:
                 user_text = message.get("text", "")
+                logger.info(f"🚀 PHASE 2C: Extracted user_text: '{user_text}'")
                 if user_text.strip():
-                    await session.process_and_stream_response(websocket, user_text)
+                    logger.info(f"🚀 PHASE 2C: About to call process_and_stream_response")
+                    try:
+                        await session.process_and_stream_response(websocket, user_text)
+                        logger.info(f"🚀 PHASE 2C: process_and_stream_response completed successfully")
+                    except Exception as e:
+                        logger.error(f"❌ PHASE 2C: Exception in process_and_stream_response: {e}")
+                        logger.error(f"❌ PHASE 2C: Exception type: {type(e)}")
+                        import traceback
+                        logger.error(f"❌ PHASE 2C: Traceback: {traceback.format_exc()}")
+                else:
+                    logger.warning(f"🚀 PHASE 2C: user_text is empty after strip()")
+            else:
+                logger.warning(f"🚀 PHASE 2C: session is None")
 
         elif message_type == "ping":
             await websocket.send_json({"type": "pong"})

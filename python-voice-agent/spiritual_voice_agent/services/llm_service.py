@@ -86,8 +86,13 @@ class SimpleOpenAILLMService:
 
 
 def create_gpt4o_mini():
-    """Create GPT-4o Mini LLM service using simplified implementation"""
-    return SimpleOpenAILLMService(model="gpt-4o-mini", temperature=0.7, timeout=30.0)
+    """Create GPT-4o Mini LLM service with streaming support for Phase 2C"""
+    from .llm.implementations.openai import OpenAILLMService
+    return OpenAILLMService({
+        "model": "gpt-4o-mini", 
+        "temperature": 0.7, 
+        "timeout": 30.0
+    })
 
 
 def create_character_llm(character_personality):
