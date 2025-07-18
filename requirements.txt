@@ -14,9 +14,6 @@ logging
 # HTTP client (for API calls)
 httpx 
 
-soundfile
-torch
-torchvision
-torchaudio
-kokoro-onnx
-python-dotenv
+# soundfile
+# kokoro
+# python-dotenv

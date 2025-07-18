@@ -86,40 +86,21 @@ def main():
     print(f"📂 Working directory: {os.getcwd()}")
     print("🚀 Launching both Token API and Agent Worker...")
 
-    # Get the directory where this script is located
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    kokoro_dir = os.path.join(script_dir, "spiritual_voice_agent", "services", "tts", "implementations", "kokoro")
-    
-    # Create kokoro directory if it doesn't exist
-    os.makedirs(kokoro_dir, exist_ok=True)
-    
-    print("Downloading kokoro model...")
-    kokoro_model_path = os.path.join(kokoro_dir, "kokoro-v1.0.onnx")
-    if not os.path.exists(kokoro_model_path):
-        model = requests.get(
-            "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
-        )
-        with open(kokoro_model_path, "wb") as f:
-            f.write(model.content)
-    
-    voices_model_path = os.path.join(kokoro_dir, "voices-v1.0.bin")
-    if not os.path.exists(voices_model_path):
-        voices = requests.get(
-            "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
-        )
-        with open(voices_model_path, "wb") as f:
-            f.write(voices.content)
-
     # Download LiveKit turn detector models if on Railway
     if os.getenv("RAILWAY_ENVIRONMENT"):
         print("🤖 Downloading LiveKit turn detector models...")
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "spiritual_voice_agent.agents.spiritual_worker", "download-files"],
+                [
+                    sys.executable,
+                    "-m",
+                    "spiritual_voice_agent.agents.spiritual_worker",
+                    "download-files",
+                ],
                 cwd=current_dir,
                 capture_output=True,
                 text=True,
-                timeout=120  # 2 minute timeout
+                timeout=120,  # 2 minute timeout
             )
             if result.returncode == 0:
                 print("✅ LiveKit models downloaded successfully")

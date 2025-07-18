@@ -13,11 +13,8 @@ deepgram-sdk>=4.5.0
 anthropic>=0.56.0
 
 # TTS Models
-kokoro-onnx>=0.4.9
-
-# 🚀 GPU ACCELERATION: CUDA-enabled ONNX Runtime for Kokoro
-onnxruntime-gpu>=1.16.0  # CUDA-enabled ONNX Runtime
-# onnxruntime>=1.16.0    # CPU fallback (automatically installed by kokoro-onnx)
+kokoro
+soundfile>=0.13.1
 
 # ML Dependencies for AI Turn Detection
 torch>=2.0.0

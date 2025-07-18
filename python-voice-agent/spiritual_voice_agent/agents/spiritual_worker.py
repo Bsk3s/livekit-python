@@ -16,7 +16,6 @@ from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, llm, stt, tts
-from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -53,12 +52,14 @@ from spiritual_voice_agent.characters.character_factory import CharacterFactory
 
 # Import our services - clean imports, no sys.path hacks!
 from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
+from spiritual_voice_agent.services.tts_factory import TTSFactory
 
 
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
 
-    def __init__(self):
+    def __init__(self, tts_services):
+        self.tts_services = tts_services
         self.active_sessions: Dict[str, AgentSession] = {}
         self.shutdown_requested = False
 
@@ -99,7 +100,7 @@ class SpiritualAgentWorker:
             # Extract character from room name
             character_name = self._extract_character_from_room(room_name)
 
-            if not character_name:
+            if not character_name or character_name not in self.tts_services.keys():
                 logger.warning(f"⚠️ Could not determine character from room name: {room_name}")
                 character_name = "adina"  # Default fallback
 
@@ -143,12 +144,9 @@ class SpiritualAgentWorker:
             try:
                 # 🎙️ TTS SERVICE: Use configurable TTS factory for easy model swapping
                 logger.info("🎙️ Creating TTS service with factory...")
-
-                # Import TTS factory for easy model swapping
-                from spiritual_voice_agent.services.tts_factory import TTSFactory
-
+                tts_service = self.tts_services[character_name]
+                logger.info(f"THIS IS THE TTS: {tts_service}")
                 # Create TTS service - easily configurable via environment
-                tts_service = TTSFactory.create_tts(character_name)
                 logger.info(f"✅ TTS service created for {character_name}")
                 logger.info("🔧 TTS model configurable via TTS_MODEL environment variable")
 
@@ -368,8 +366,15 @@ class SpiritualAgentWorker:
         signal.signal(signal.SIGTERM, signal_handler)
 
 
+# Preload the TTS services for faster first inference
+logger.info("Creating TTS Services")
+tts_services = {
+    "rafa": TTSFactory.create_tts("rafa", model_override="kokoro"),
+    "adina": TTSFactory.create_tts("adina", model_override="kokoro"),
+}
+logger.info("TTS Services created successfully")
 # Global worker instance
-spiritual_worker = SpiritualAgentWorker()
+spiritual_worker = SpiritualAgentWorker(tts_services)
 
 
 async def entrypoint(ctx: JobContext):

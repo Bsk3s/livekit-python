@@ -1,13 +1,15 @@
 import io
 import logging
-import os
 
 logger = logging.getLogger(__name__)
+
+
 from uuid import uuid4
 
 import numpy as np
 import soundfile as sf
-from kokoro_onnx import Kokoro
+import torch
+from kokoro import KPipeline
 from livekit.agents import tts
 from livekit.agents.tts import ChunkedStream, TTSCapabilities
 
@@ -23,16 +25,17 @@ class KokoroTTS(tts.TTS):
         self.voice = voice
         self.model = self._load_custom_model()
         self.lang = "en-us"
-        self.speed = 1.12
+        self.speed = 1.1
 
-    async def asynthesize(self, text: str) -> bytes:
+    async def asynthesize(self, text: str):
         try:
-            logger.info(f"🎵 Generating welcome WAV: with Kokoro")
-            samples, sample_rate = self.model(text)
-            return self._array_to_bytes(samples, sample_rate)
+            generator = self.model(text)
+            for i, (gs, ps, audio) in enumerate(generator):
+                if i == 0:
+                    yield self._tensor_to_bytes(audio)
 
         except Exception as e:
-            print(f"Synthesis error: {e}")
+            print(f"Error synthesizing speech: {e}")
             raise e
 
     def synthesize(self, text: str, *, conn_options=None) -> ChunkedStream:
@@ -41,9 +44,15 @@ class KokoroTTS(tts.TTS):
 
     def _generate_audio_sync(self, text: str) -> bytes:
         samples, sample_rate = self.model(text)
-        return self._array_to_bytes(samples, sample_rate)
+        return self._tensor_to_bytes(samples, sample_rate)
 
-    def _array_to_bytes(self, audio_array: np.ndarray, sample_rate: int = 24000) -> bytes:
+    def _tensor_to_ndarray(
+        self, audio_tensor: torch.Tensor, sample_rate: int = 24000
+    ) -> np.ndarray:
+        # Move to CPU and convert to numpy
+        audio_array = audio_tensor.cpu().detach().numpy().astype(np.float32)
+
+        # Squeeze to remove extra dimensions
         audio_array = audio_array.squeeze()
 
         # Normalize to [-1, 1] range if needed
@@ -58,14 +67,10 @@ class KokoroTTS(tts.TTS):
         return buffer.read()
 
     def _load_custom_model(self):
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        model_path = os.path.join(base_dir, "kokoro-v1.0.onnx")
-        voices_path = os.path.join(base_dir, "voices-v1.0.bin")
-
-        model = Kokoro(model_path, voices_path)
+        self.base_model = KPipeline(lang_code="a")
 
         def call_model(text):
-            return model.create(text, self.voice, speed=self.speed, lang=self.lang)
+            return self.base_model(text, self.voice, speed=self.speed)
 
         return call_model
 
@@ -81,14 +86,11 @@ class KokoroChunkedStream(ChunkedStream):
             )
             generator = self._tts.model(self._input_text, voice=self._tts.voice)
             for i, (gs, ps, audio) in enumerate(generator):
-                if i == 0:
-                    audio_bytes = self._tts._tensor_to_bytes(audio)
-                    output_emitter.push(audio_bytes)
-                    break
+                audio_bytes = self._tts._tensor_to_bytes(audio)
+                output_emitter.push(audio_bytes)
             output_emitter.end_input()
             output_emitter.aclose()
 
         except Exception as e:
             print(f"Synthesis error: {e}")
-            raise e
             raise e
