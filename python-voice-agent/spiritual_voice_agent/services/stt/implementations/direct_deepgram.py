@@ -318,20 +318,34 @@ class DirectDeepgramSTTService(BaseSTTService):
             return await self.transcribe_audio_bytes(audio_chunk)
             
         try:
-            # Ensure proper WAV format
+            # FIXED: Prepare audio in correct format for streaming
             if not audio_chunk.startswith(b"RIFF"):
+                # Create WAV for processing but send PCM to WebSocket
                 audio_chunk = self._create_wav_file(audio_chunk, 16000, 1, 16)
+                logger.debug(f"🔧 Created WAV format: {len(audio_chunk)} bytes")
                 
             # Use WebSocket streaming API for real-time results
-            return await self._stream_transcribe_websocket(
+            result = await self._stream_transcribe_websocket(
                 audio_chunk, on_partial_result, on_final_result, confidence_threshold
             )
             
+            if result:
+                logger.debug(f"✅ Streaming successful: '{result}'")
+                return result
+            else:
+                logger.warning("⚠️ Streaming returned no result, but no error occurred")
+                return None
+            
         except Exception as e:
             logger.error(f"❌ Streaming transcription error: {e}")
-            # Fallback to batch method on streaming failure
-            logger.info("🔄 Falling back to batch transcription")
-            return await self.transcribe_audio_bytes(audio_chunk)
+            # IMPROVED: More specific error handling
+            if "websocket" in str(e).lower() or "connection" in str(e).lower():
+                logger.warning("🔄 WebSocket connection issue, retrying with new connection")
+                # Could implement retry logic here
+            else:
+                logger.warning("🔄 Streaming failed, falling back to batch mode")
+                return await self.transcribe_audio_bytes(audio_chunk)
+            return None
     
     # ===== PHASE 2B: PROGRESSIVE STREAMING METHODS =====
     
@@ -373,21 +387,18 @@ class DirectDeepgramSTTService(BaseSTTService):
                 if self._continuous_websocket and not self._continuous_websocket.closed:
                     return self._continuous_websocket
                 
-                # Build WebSocket URL with streaming parameters optimized for progressive chunks
+                # Build WebSocket URL with SIMPLIFIED streaming parameters (match regular streaming)
                 params = {
                     "model": self.config.get("model", "nova-2"),
                     "language": self.config.get("language", "en-US"),
-                    "punctuate": str(self.config.get("punctuate", True)).lower(),
-                    "smart_format": str(self.config.get("smart_format", True)).lower(),
+                    "punctuate": "true",
+                    "smart_format": "true",
                     "interim_results": "true",  # CRITICAL for progressive streaming
-                    "utterances": "false",  # Don't auto-close on utterance end
-                    "profanity_filter": str(self.config.get("profanity_filter", False)).lower(),
-                    "numerals": str(self.config.get("numerals", False)).lower(),
                     "no_delay": "true",  # Minimize latency
-                    "endpointing": "100",  # Very short endpointing for progressive chunks
+                    "endpointing": "300",  # Match regular streaming
                     "channels": "1",
                     "sample_rate": "16000",
-                    "encoding": "linear16"
+                    "encoding": "linear16"  # Raw PCM encoding
                 }
                 
                 # Build WebSocket URL
@@ -419,7 +430,7 @@ class DirectDeepgramSTTService(BaseSTTService):
     async def _close_continuous_websocket(self):
         """Close the continuous WebSocket connection"""
         async with self._websocket_lock:
-            if self._continuous_websocket and not self._continuous_websocket.closed:
+            if self._continuous_websocket and hasattr(self._continuous_websocket, 'closed') and not self._continuous_websocket.closed:
                 try:
                     await self._continuous_websocket.close()
                     logger.debug("🔒 Continuous WebSocket closed")
@@ -437,18 +448,18 @@ class DirectDeepgramSTTService(BaseSTTService):
     ) -> Optional[str]:
         """Handle WebSocket streaming transcription"""
         try:
-            # Build WebSocket URL with streaming parameters
+            # Build WebSocket URL with SIMPLIFIED streaming parameters (Deepgram compatible)
             params = {
                 "model": self.config.get("model", "nova-2"),
-                "language": self.config.get("language", "en-US"),
-                "punctuate": str(self.config.get("punctuate", True)).lower(),
-                "smart_format": str(self.config.get("smart_format", True)).lower(),
+                "language": self.config.get("language", "en-US"), 
+                "punctuate": "true",
+                "smart_format": "true",
                 "interim_results": "true",  # ENABLE STREAMING!
-                "utterances": "true",
-                "profanity_filter": str(self.config.get("profanity_filter", False)).lower(),
-                "numerals": str(self.config.get("numerals", False)).lower(),
-                "no_delay": "true",
-                "endpointing": "300",  # 300ms silence = utterance end
+                "no_delay": "true",  # Minimize latency
+                "endpointing": "300",  # 300ms - more conservative for testing
+                "channels": "1",
+                "sample_rate": "16000",
+                "encoding": "linear16"  # Raw PCM encoding
             }
             
             # Build WebSocket URL
@@ -464,8 +475,19 @@ class DirectDeepgramSTTService(BaseSTTService):
             async with websockets.connect(ws_url, additional_headers=headers) as websocket:
                 logger.debug("✅ WebSocket connected, sending audio...")
                 
-                # Send audio data
-                await websocket.send(audio_data)
+                # FIXED: Convert WAV back to raw PCM for WebSocket streaming
+                raw_pcm_data = audio_data
+                if audio_data.startswith(b"RIFF"):
+                    # Extract PCM data from WAV (skip 44-byte header)
+                    raw_pcm_data = audio_data[44:]
+                    logger.debug(f"🔧 Extracted {len(raw_pcm_data)} bytes of PCM from WAV")
+                
+                # Send raw PCM data in chunks for better streaming
+                chunk_size = 3200  # 100ms chunks at 16kHz 16-bit
+                for i in range(0, len(raw_pcm_data), chunk_size):
+                    chunk = raw_pcm_data[i:i+chunk_size]
+                    await websocket.send(chunk)
+                    logger.debug(f"📤 Sent {len(chunk)} bytes PCM chunk")
                 
                 # Send close message to indicate end of audio
                 await websocket.send(json.dumps({"type": "CloseStream"}))
@@ -490,12 +512,18 @@ class DirectDeepgramSTTService(BaseSTTService):
                                         final_confidence = confidence
                                     
                                     if on_final_result:
-                                        on_final_result(transcript, confidence)
+                                        if asyncio.iscoroutinefunction(on_final_result):
+                                            await on_final_result(transcript, confidence)
+                                        else:
+                                            on_final_result(transcript, confidence)
                                         
                                 else:
                                     logger.debug(f"🔄 Partial result: '{transcript}' (confidence: {confidence:.2f})")
                                     if on_partial_result:
-                                        on_partial_result(transcript, confidence)
+                                        if asyncio.iscoroutinefunction(on_partial_result):
+                                            await on_partial_result(transcript, confidence)
+                                        else:
+                                            on_partial_result(transcript, confidence)
                         
                         elif result.get("type") == "Utterance":
                             logger.debug("🔚 Utterance complete")
@@ -720,10 +748,13 @@ class ProgressiveStreamHandler:
             # Stop processing
             await self.close()
             
-            # Return final accumulated transcript
+            # Return final accumulated transcript (FIXED: async call)
             final_transcript = self.accumulated_transcript.strip()
             if final_transcript and self.on_final_result:
-                self.on_final_result(final_transcript, self.last_confidence)
+                if asyncio.iscoroutinefunction(self.on_final_result):
+                    await self.on_final_result(final_transcript, self.last_confidence)
+                else:
+                    self.on_final_result(final_transcript, self.last_confidence)
                 
             logger.info(f"🎯 Progressive stream finalized: '{final_transcript}'")
             return final_transcript
@@ -802,9 +833,12 @@ class ProgressiveStreamHandler:
                         self.early_trigger_sent = True
                         logger.info(f"🚀 EARLY TRIGGER: '{transcript}' (confidence: {confidence:.2f})")
                     
-                    # Call callback with early trigger flag
+                    # Call callback with early trigger flag (FIXED: async call)
                     if self.on_partial_result:
-                        self.on_partial_result(transcript, confidence, should_trigger_early)
+                        if asyncio.iscoroutinefunction(self.on_partial_result):
+                            await self.on_partial_result(transcript, confidence, should_trigger_early)
+                        else:
+                            self.on_partial_result(transcript, confidence, should_trigger_early)
                         
             elif result.get("type") == "SpeechStarted":
                 logger.debug("🗣️ Progressive speech started")

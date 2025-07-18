@@ -705,14 +705,24 @@ class AudioSession:
             if not self.stt_service:
                 return False
                 
-            # Create progressive stream handler
+            # Create progressive stream handler with FIXED async callbacks
+            async def handle_partial_wrapper(text: str, confidence: float, early_trigger: bool):
+                """Proper async wrapper for partial results"""
+                try:
+                    await self._handle_progressive_partial(websocket, text, confidence, early_trigger)
+                except Exception as e:
+                    logger.error(f"❌ Error in partial callback: {e}")
+            
+            async def handle_final_wrapper(text: str, confidence: float):
+                """Proper async wrapper for final results"""
+                try:
+                    await self._handle_progressive_final(websocket, text, confidence)
+                except Exception as e:
+                    logger.error(f"❌ Error in final callback: {e}")
+            
             self._progressive_stream_handler = await self.stt_service.start_progressive_stream(
-                on_partial_result=lambda text, confidence, early_trigger: asyncio.create_task(
-                    self._handle_progressive_partial(websocket, text, confidence, early_trigger)
-                ),
-                on_final_result=lambda text, confidence: asyncio.create_task(
-                    self._handle_progressive_final(websocket, text, confidence)  
-                ),
+                on_partial_result=handle_partial_wrapper,
+                on_final_result=handle_final_wrapper,
                 confidence_threshold=self._progressive_confidence_threshold
             )
             
@@ -1211,23 +1221,26 @@ class AudioSession:
             partial_results = []
             final_result = None
             
-            def on_partial(text: str, confidence: float):
-                """Handle partial transcription results"""
+            async def on_partial(text: str, confidence: float):
+                """Handle partial transcription results (FIXED: async)"""
                 partial_results.append((text, confidence))
                 logger.debug(f"🔄 Partial: '{text}' ({confidence:.2f})")
                 
-                # Send partial result to client (non-blocking)
+                # Send partial result to client (FIXED: proper async)
                 if websocket.client_state == WebSocketState.CONNECTED:
-                    asyncio.create_task(websocket.send_json({
-                        "type": "transcription_partial",
-                        "text": text,
-                        "confidence": confidence,
-                        "is_interim": True,
-                        "timestamp": datetime.now().isoformat(),
-                    }))
+                    try:
+                        await websocket.send_json({
+                            "type": "transcription_partial",
+                            "text": text,
+                            "confidence": confidence,
+                            "is_interim": True,
+                            "timestamp": datetime.now().isoformat(),
+                        })
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to send partial result: {e}")
             
-            def on_final(text: str, confidence: float):
-                """Handle final transcription result"""
+            async def on_final(text: str, confidence: float):
+                """Handle final transcription result (FIXED: async)"""
                 nonlocal final_result
                 final_result = (text, confidence)
                 logger.debug(f"🎯 Final: '{text}' ({confidence:.2f})")
