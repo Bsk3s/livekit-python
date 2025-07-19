@@ -17,7 +17,8 @@ from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, llm, stt, tts
 from livekit.plugins import deepgram, openai, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+# from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # CRITICAL: Sanitize environment variables to fix API key issues
 # Remove any trailing whitespace/newlines that cause "illegal header value" errors
@@ -175,9 +176,9 @@ class SpiritualAgentWorker:
                         min_speech_duration=0.02,  # Quick speech detection
                         min_silence_duration=0.05,  # Fast silence detection
                     ),
-                    turn_detector=MultilingualModel(
-                        unlikely_threshold=0.5,  # Sensitivity for turn detection
-                    ),
+                    # turn_detector=MultilingualModel(
+                    #     unlikely_threshold=0.5,  # Sensitivity for turn detection
+                    # ),
                     stt=stt_service,
                     llm=llm_service,
                     tts=tts_service,  # ElevenLabs or OpenAI TTS
@@ -209,9 +210,9 @@ class SpiritualAgentWorker:
                 try:
                     session = AgentSession(
                         vad=silero.VAD.load(),
-                        turn_detector=MultilingualModel(
-                            unlikely_threshold=0.5,  # Sensitivity for turn detection
-                        ),
+                        # turn_detector=MultilingualModel(
+                        #     unlikely_threshold=0.5,  # Sensitivity for turn detection
+                        # ),
                         stt=stt_service,
                         llm=llm_service,
                         tts=tts_service,

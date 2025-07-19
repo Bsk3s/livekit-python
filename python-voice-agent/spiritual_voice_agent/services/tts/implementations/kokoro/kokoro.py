@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 
@@ -12,6 +13,7 @@ import torch
 from kokoro import KPipeline
 from livekit.agents import tts
 from livekit.agents.tts import ChunkedStream, TTSCapabilities
+from livekit.rtc import AudioFrame
 
 
 class KokoroTTS(tts.TTS):
@@ -37,6 +39,28 @@ class KokoroTTS(tts.TTS):
         except Exception as e:
             print(f"Error synthesizing speech: {e}")
             raise e
+
+    # TODO: Code for livekit implementation
+    # async def asynthesize(self, text: str) -> tts.SynthesizedAudio:
+    #     try:
+    #         generator = self.model(text, voice=self.voice)
+    #         for i, (gs, ps, audio) in enumerate(generator):
+    #             if i == 0:
+    #                 audio_bytes = self._tensor_to_bytes(audio)
+    #                 audio_array = audio.cpu().detach().numpy().squeeze()
+    #                 samples_per_channel = len(audio_array)
+
+    #                 frame = AudioFrame(
+    #                     data=audio_bytes,
+    #                     sample_rate=24000,
+    #                     num_channels=1,
+    #                     samples_per_channel=samples_per_channel,
+    #                 )
+
+    #                 return tts.SynthesizedAudio(frame=frame, request_id=str(uuid4()))
+    #     except Exception as e:
+    #         print(f"Synthesis error: {e}")
+    #         raise e
 
     def synthesize(self, text: str, *, conn_options=None) -> ChunkedStream:
         logger.info(f"🎵 Generating audio with Kokoro streaming")
@@ -83,7 +107,7 @@ class KokoroChunkedStream(ChunkedStream):
     async def _run(self, output_emitter=None):
         try:
             output_emitter.initialize(
-                request_id=str(uuid4), sample_rate=24000, num_channels=1, mime_type=""
+                request_id=str(uuid4()), sample_rate=24000, num_channels=1, mime_type=""
             )
             generator = self._tts.model(self._input_text, voice=self._tts.voice)
             for i, (gs, ps, audio) in enumerate(generator):

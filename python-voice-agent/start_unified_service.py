@@ -4,17 +4,13 @@ Unified Spiritual Guidance Service
 Runs both the FastAPI token API and LiveKit agent worker together
 """
 
-import asyncio
 import os
 import signal
 import subprocess
 import sys
-import threading
 import time
 from multiprocessing import Process
 from pathlib import Path
-
-import requests
 
 # Get current directory for subprocess calls
 current_dir = Path(__file__).parent
