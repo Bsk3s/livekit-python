@@ -53,7 +53,7 @@ class OpenAILLMService(BaseLLMService):
         messages.append({"role": "user", "content": prompt})
 
         response = await self._client.chat.completions.create(
-            model=self.config.get("model", "gpt-4"),
+            model=self.config.get("model", "gpt-4o-mini"),
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -78,7 +78,7 @@ class OpenAILLMService(BaseLLMService):
         messages.append({"role": "user", "content": prompt})
 
         stream = await self._client.chat.completions.create(
-            model=self.config.get("model", "gpt-4"),
+            model=self.config.get("model", "gpt-4o-mini"),
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
