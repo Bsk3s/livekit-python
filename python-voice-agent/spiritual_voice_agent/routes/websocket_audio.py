@@ -214,20 +214,20 @@ class AudioSession:
 
         # Enhanced voice activity detection
         self._recent_energy_levels = []  # Track recent energy levels
-        self._energy_threshold = 100  # Lowered for real microphone input calibration
+        self._energy_threshold = 50  # Lowered for real microphone input (was 100)
         self._min_sustained_chunks = 1  # Require only 1 high-energy chunk for interruption (was 3) - kept low for real mic testing
         self._max_energy_history = 10  # Keep last 10 energy measurements
         self._last_speech_time = 0  # Track when we last detected speech
         self._speech_cooldown = 0.1  # Seconds to wait after speech before resetting (was 2.0)
 
-        # 🎯 ADAPTIVE BUFFERING SYSTEM - Balance speed and accuracy
+        # 🎯 ADAPTIVE BUFFERING SYSTEM - Balance speed and accuracy (LOWERED THRESHOLDS FOR REAL TESTING)
         self._adaptive_buffer_config = {
-            "quick_response_threshold": 20000,  # 20KB - Fast response for short phrases
-            "normal_speech_threshold": 50000,  # 50KB - Standard speech processing
-            "long_thought_threshold": 100000,  # 100KB - Longer thoughts/statements
-            "max_buffer_size": 150000,  # 150KB - Absolute maximum
-            "silence_detection_ms": 800,  # 800ms silence = speech complete
-            "min_speech_duration_ms": 300,  # 300ms minimum speech before processing
+            "quick_response_threshold": 4000,   # 4KB - Fast response for short phrases (was 20KB)
+            "normal_speech_threshold": 8000,   # 8KB - Standard speech processing (was 50KB)  
+            "long_thought_threshold": 16000,   # 16KB - Longer thoughts/statements (was 100KB)
+            "max_buffer_size": 32000,          # 32KB - Absolute maximum (was 150KB)
+            "silence_detection_ms": 200,       # 200ms silence = speech complete (was 800ms)
+            "min_speech_duration_ms": 100,     # 100ms minimum speech before processing (was 300ms)
         }
         self._speech_start_time = None  # Track when speech started
         self._last_high_energy_time = None  # Track last high energy moment
@@ -551,6 +551,9 @@ class AudioSession:
             # ✅ ALWAYS-ON VAD: Always calculate audio energy
             audio_energy = self._calculate_audio_energy(audio_data)
             current_time = time.time()
+            
+            # 🔍 DEBUG: Log audio energy levels to understand threshold tuning
+            logger.info(f"🎤 AUDIO ENERGY: {audio_energy:.1f} (threshold: {self._energy_threshold}, buffer: {len(self._audio_buffer)} bytes)")
 
             # ✅ ALWAYS-ON VAD: Always update energy history for sustained speech detection
             self._recent_energy_levels.append(audio_energy)
@@ -659,9 +662,12 @@ class AudioSession:
             should_process, process_reason, processing_mode = self._should_process_buffer(
                 buffer_size, current_time
             )
+            
+            # 🔍 DEBUG: Log buffer processing decisions
+            logger.info(f"🎯 BUFFER DECISION: should_process={should_process}, reason='{process_reason}', mode='{processing_mode}', buffer={buffer_size} bytes")
 
             if should_process:
-                logger.debug(f"🔄 Falling back to batch transcription: {process_reason}")
+                logger.info(f"🔄 Falling back to batch transcription: {process_reason}")
                 return await self._process_audio_batch(websocket, processing_mode, current_time, chunk_start_time)
 
             # Performance logging for VAD-only processing
@@ -1602,7 +1608,7 @@ class AudioSession:
         # Track speech start
         if audio_energy > self._energy_threshold and not self._speech_start_time:
             self._speech_start_time = current_time
-            logger.debug(f"🎤 Speech started at {current_time}")
+            logger.info(f"🎤 SPEECH STARTED: energy={audio_energy:.1f} > threshold={self._energy_threshold} at {current_time}")
 
         # Track last high energy moment
         if audio_energy > self._energy_threshold:
@@ -1612,7 +1618,7 @@ class AudioSession:
         if self._last_high_energy_time and (current_time - self._last_high_energy_time) > 2.0:
             self._speech_start_time = None
             self._last_high_energy_time = None
-            logger.debug(f"🎤 Speech tracking reset - no energy for 2s")
+            logger.info(f"🎤 SPEECH TRACKING RESET: no energy for 2s")
 
     def _get_processing_timeout(self, mode: str) -> float:
         """
