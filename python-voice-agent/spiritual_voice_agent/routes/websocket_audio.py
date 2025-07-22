@@ -1889,16 +1889,27 @@ class AudioSession:
             # Use direct OpenAI API for WAV output (most reliable approach)
 
             try:
-                pcm_bytes = await self.tts_service.asynthesize(text)
-                return pcm_to_wav(
-                    pcm_data=pcm_bytes,
-                    sample_rate=24000,
-                    num_channels=1,
-                    bit_depth=16,
-                )
+                # Handle async generator (Kokoro TTS yields bytes)
+                audio_generator = self.tts_service.asynthesize(text)
+                pcm_bytes = None
+                async for audio_chunk in audio_generator:
+                    pcm_bytes = audio_chunk
+                    break  # Get first chunk
+                    
+                if pcm_bytes:
+                    return pcm_to_wav(
+                        pcm_data=pcm_bytes,
+                        sample_rate=24000,
+                        num_channels=1,
+                        bit_depth=16,
+                    )
+                else:
+                    logger.warning("⚠️ Kokoro TTS returned no audio data")
+                    return b""  # No OpenAI fallback - return empty bytes
+                    
             except Exception as e:
-                logger.error(f"❌ Error generating welcome audio: {e}")
-                return await self._fallback_tts_synthesis(text)
+                logger.error(f"❌ Kokoro TTS synthesis error: {e}")
+                return b""  # No OpenAI fallback - return empty bytes
 
         except Exception as e:
             logger.error(f"❌ WAV TTS synthesis error: {e}")
@@ -1910,76 +1921,7 @@ class AudioSession:
             # Return empty bytes as fallback
             return b""
 
-    async def _fallback_tts_synthesis(self, text: str) -> bytes:
-        """Fallback TTS synthesis using direct OpenAI API (22050 Hz WAV for iOS compatibility)"""
-        try:
-            logger.info(f"🔄 Trying fallback TTS for: '{text[:30]}...'")
 
-            # Direct OpenAI TTS call with WAV output
-            import openai
-
-            response = await openai.AsyncOpenAI().audio.speech.create(
-                model="tts-1",
-                voice="nova" if self.character == "adina" else "onyx",
-                input=text,
-                response_format="wav",  # WAV format for iOS compatibility
-                speed=1.0,  # Normal speed
-            )
-
-            audio_data = await response.aread()
-
-            # 🔍 DETAILED BYTE ANALYSIS
-
-            # Check first 20 bytes to identify format
-            first_20_bytes = audio_data[:20] if len(audio_data) >= 20 else audio_data
-            first_20_hex = " ".join(f"{b:02x}" for b in first_20_bytes)
-            first_20_ascii = "".join(chr(b) if 32 <= b <= 126 else "." for b in first_20_bytes)
-
-            logger.info(f"🔍 BYTE ANALYSIS: First 20 bytes hex: {first_20_hex}")
-            logger.info(f"🔍 BYTE ANALYSIS: First 20 bytes ASCII: {first_20_ascii}")
-
-            # Check for common audio format signatures
-            is_wav = len(audio_data) >= 4 and audio_data[:4] == b"RIFF"
-            is_mp3 = len(audio_data) >= 3 and (
-                audio_data[:3] == b"ID3"
-                or (audio_data[0] == 0xFF and (audio_data[1] & 0xE0) == 0xE0)
-            )
-            is_aac = len(audio_data) >= 2 and audio_data[:2] == b"\xff\xf1"
-
-            logger.info(f"🔍 FORMAT DETECTION: WAV={is_wav}, MP3={is_mp3}, AAC={is_aac}")
-
-            # If it's WAV, check the header details and convert to 22050 Hz if needed
-            if is_wav and len(audio_data) >= 44:
-                try:
-                    import struct
-
-                    # Parse WAV header
-                    riff, size, wave = struct.unpack("<4sI4s", audio_data[:12])
-                    (
-                        fmt,
-                        fmt_size,
-                        audio_format,
-                        channels,
-                        sample_rate,
-                        byte_rate,
-                        block_align,
-                        bits_per_sample,
-                    ) = struct.unpack("<4sIHHIIHH", audio_data[12:36])
-
-                    logger.info(
-                        f"🔍 WAV HEADER: Sample Rate={sample_rate}, Channels={channels}, Bits={bits_per_sample}, Format={audio_format}"
-                    )
-                    audio_data = convert_to_ios_format(audio_data, sample_rate)
-
-                except Exception as e:
-                    logger.error(f"🔍 WAV HEADER PARSE ERROR: {e}")
-
-            logger.info(f"🎵 Fallback TTS generated: {len(audio_data)} bytes")
-            return audio_data
-
-        except Exception as e:
-            logger.error(f"❌ Fallback TTS also failed: {e}")
-            return b""
 
     async def process_conversation_turn(
         self, websocket: WebSocket, user_input: str, audio_duration_seconds: float = None
@@ -2751,20 +2693,29 @@ async def handle_json_message(
             # TODO: Move error handling and calling of tts to a different function somewhere else. It should just return the pcm bytes or empty
             # TODO: Detect requests from ios vs web to output valid format
             try:
-                pcm_bytes = await session.tts_service.asynthesize(welcome_message)
-                sample_rate = 24000
-
-                welcome_audio = pcm_to_wav(
-                    pcm_data=pcm_bytes,
-                    sample_rate=sample_rate,
-                    num_channels=1,
-                    bit_depth=16,
-                )
-                welcome_audio_ios = convert_to_ios_format(welcome_audio, sample_rate)
+                # Handle async generator (Kokoro TTS yields bytes)
+                audio_generator = session.tts_service.asynthesize(welcome_message)
+                pcm_bytes = None
+                async for audio_chunk in audio_generator:
+                    pcm_bytes = audio_chunk
+                    break  # Get first chunk
+                    
+                if pcm_bytes:
+                    sample_rate = 24000
+                    welcome_audio = pcm_to_wav(
+                        pcm_data=pcm_bytes,
+                        sample_rate=sample_rate,
+                        num_channels=1,
+                        bit_depth=16,
+                    )
+                    welcome_audio_ios = convert_to_ios_format(welcome_audio, sample_rate)
+                else:
+                    logger.warning("⚠️ Kokoro TTS returned no audio data for welcome message")
+                    welcome_audio_ios = b""  # No OpenAI fallback - use empty bytes
 
             except Exception as e:
-                logger.error(f"❌ Error generating welcome audio: {e}")
-                welcome_audio_ios = await session._fallback_tts_synthesis(welcome_message)
+                logger.error(f"❌ Kokoro TTS welcome audio error: {e}")
+                welcome_audio_ios = b""  # No OpenAI fallback - use empty bytes
 
             if welcome_audio_ios:
                 welcome_base64 = base64.b64encode(welcome_audio_ios).decode("utf-8")
