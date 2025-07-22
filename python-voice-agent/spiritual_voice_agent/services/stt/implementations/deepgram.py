@@ -1,5 +1,5 @@
 import os
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, Optional
 
 from livekit.plugins import deepgram
 
@@ -63,3 +63,32 @@ class DeepgramSTTService(BaseSTTService):
         # Implement file transcription logic
         # This is a placeholder - actual implementation will depend on Deepgram's API
         return "Complete transcription"  # Replace with actual transcription
+
+    async def transcribe_audio_bytes(self, audio_data: bytes) -> Optional[str]:
+        """Transcribe raw audio bytes using Deepgram"""
+        if not self._initialized:
+            await self.initialize()
+        
+        try:
+            # Use the livekit-agents Deepgram plugin for reliable transcription
+            import io
+            
+            # Create a temporary file-like object from bytes
+            audio_buffer = io.BytesIO(audio_data)
+            
+            # For now, use transcribe_stream with a simple generator
+            async def byte_stream():
+                yield audio_data
+            
+            # Get transcription from stream
+            result_text = ""
+            async for text_chunk in self.transcribe_stream(byte_stream()):
+                result_text += text_chunk
+            
+            return result_text.strip() if result_text.strip() else None
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"❌ Deepgram transcription error: {e}")
+            return None

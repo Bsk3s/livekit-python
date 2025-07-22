@@ -22,8 +22,8 @@ from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
 from spiritual_voice_agent.services.metrics_service import get_metrics_service
 
 # Import existing services
-from spiritual_voice_agent.services.stt.implementations.direct_deepgram import (
-    DirectDeepgramSTTService,
+from spiritual_voice_agent.services.stt.implementations.deepgram import (
+    DeepgramSTTService,
 )
 from spiritual_voice_agent.services.tts_factory import TTSFactory
 
@@ -282,8 +282,8 @@ class AudioSession:
         self._metrics_service = get_metrics_service()
         self._timing_data = {}  # Store timing data for complete conversation turn logging
         
-        # 🚀 PHASE 2B: PROGRESSIVE STREAMING - Real-time processing while speaking
-        self._progressive_streaming_enabled = True  # Enable progressive streaming by default
+        # 🚀 PHASE 2B: PROGRESSIVE STREAMING - Disabled for stable DeepgramSTTService
+        self._progressive_streaming_enabled = False  # Disabled - not supported by DeepgramSTTService
         self._progressive_stream_handler = None  # Active progressive stream
         self._progressive_transcript = ""  # Accumulated transcript from progressive stream
         self._early_llm_trigger_sent = False  # Flag to prevent duplicate early triggers
@@ -303,18 +303,18 @@ class AudioSession:
         """Initialize all services for this session"""
         logger.info(f"🚀 STARTING AudioSession.initialize() for session {self.session_id}")
         try:
-            # STT Service - Direct Deepgram with streaming capabilities enabled
+            # STT Service - Official Deepgram SDK (stable and reliable)
             logger.info(f"🎧 Creating STT service for session {self.session_id}")
-            self.stt_service = DirectDeepgramSTTService(
+            self.stt_service = DeepgramSTTService(
                 {
                     "model": "nova-2",
                     "language": "en-US",
                     "punctuate": True,
                     "interim_results": True,  # Enable streaming mode
-                    "streaming_enabled": True,  # Enable WebSocket streaming
-                    "progressive_streaming": self._progressive_streaming_enabled,  # 🚀 PHASE 2B
-                    "chunk_duration_ms": 250,  # 250ms progressive chunks
-                    "early_processing_threshold": self._progressive_confidence_threshold,  # Early LLM trigger
+                    "smart_format": True,
+                    "no_delay": True,
+                    "endpointing_ms": 300,
+                    "sample_rate": 16000,
                 }
             )
             await self.stt_service.initialize()
@@ -626,18 +626,19 @@ class AudioSession:
                 return None
 
             # 🚀 PHASE 2B: PROGRESSIVE STREAMING - Process while user is speaking
-            if self._progressive_streaming_enabled and not self._progressive_stream_handler:
-                # Start progressive stream on first audio chunk
-                await self._start_progressive_stream(websocket)
+            # 🚀 PHASE 2B: PROGRESSIVE STREAMING - Disabled for stable DeepgramSTTService
+            # if self._progressive_streaming_enabled and not self._progressive_stream_handler:
+            #     # Start progressive stream on first audio chunk
+            #     await self._start_progressive_stream(websocket)
                 
-            # Send audio chunk to progressive stream
-            if self._progressive_stream_handler:
-                progressive_result = await self._send_to_progressive_stream(audio_data, websocket, current_time)
-                if progressive_result:
-                    chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
-                    self._track_performance_metric("progressive_processing_time", chunk_duration_ms)
-                    logger.info(f"🚀 Progressive streaming completed: {chunk_duration_ms:.2f}ms")
-                    return progressive_result
+            # # Send audio chunk to progressive stream
+            # if self._progressive_stream_handler:
+            #     progressive_result = await self._send_to_progressive_stream(audio_data, websocket, current_time)
+            #     if progressive_result:
+            #         chunk_duration_ms = (time.perf_counter() - chunk_start_time) * 1000
+            #         self._track_performance_metric("progressive_processing_time", chunk_duration_ms)
+            #         logger.info(f"🚀 Progressive streaming completed: {chunk_duration_ms:.2f}ms")
+            #         return progressive_result
 
             # 🚀 PHASE 2A: TRY STREAMING FIRST, FALL BACK TO BATCH (Fallback)
             buffer_size = len(self._audio_buffer)
@@ -1187,6 +1188,9 @@ class AudioSession:
         
         Returns transcription if successful, None if should fall back to batch.
         """
+        # Disabled - DeepgramSTTService doesn't support transcribe_audio_stream method
+        return None
+        
         try:
             # Track streaming attempt
             self._track_performance_metric("streaming_attempted")
