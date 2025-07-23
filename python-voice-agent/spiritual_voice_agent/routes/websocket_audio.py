@@ -1149,12 +1149,16 @@ class AudioSession:
             audio_data = await self.synthesize_speech_chunk(sentence)
             tts_duration_ms = (time.perf_counter() - tts_start_time) * 1000
             
+            logger.info(f"🔍 STREAMING TTS DEBUG: audio_data = {type(audio_data)}, {len(audio_data) if audio_data else 'None'} bytes")
+            
             if audio_data:
                 # Send audio chunk immediately
+                logger.info(f"🔍 STREAMING TTS DEBUG: About to base64 encode {len(audio_data)} bytes")
                 audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+                logger.info(f"🔍 STREAMING TTS DEBUG: Base64 encoded to {len(audio_base64)} chars")
                 
                 if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_json({
+                    message_data = {
                         "type": "streaming_audio_chunk",
                         "chunk_id": chunk_id,
                         "text": sentence,
@@ -1163,7 +1167,12 @@ class AudioSession:
                         "tts_latency_ms": tts_duration_ms,
                         "conversation_state": self.conversation_state,
                         "timestamp": datetime.now().isoformat(),
-                    })
+                    }
+                    logger.info(f"🔍 STREAMING TTS DEBUG: About to send message with audio field length: {len(message_data.get('audio', ''))}")
+                    try:
+                        await websocket.send_json(message_data)
+                    except Exception as send_error:
+                        logger.warning(f"⚠️ Failed to send streaming audio chunk: {send_error}")
                 
                 total_chunk_time = (time.perf_counter() - chunk_start_time) * 1000
                 logger.info(f"🎵 TTS Chunk {chunk_id}: Completed in {total_chunk_time:.1f}ms (TTS: {tts_duration_ms:.1f}ms)")
@@ -1541,18 +1550,22 @@ class AudioSession:
 
         # Check if we have any speech at all
         if not self._speech_start_time:
+            logger.debug(f"🔍 BUFFER CHECK: No speech started yet")
             return False, "no_speech_started", "none"
 
         speech_duration = (current_time - self._speech_start_time) * 1000  # Convert to ms
 
         # Check minimum speech duration
         if speech_duration < config["min_speech_duration_ms"]:
+            logger.debug(f"🔍 BUFFER CHECK: Speech too short: {speech_duration:.0f}ms < {config['min_speech_duration_ms']}ms")
             return False, f"speech_too_short_{speech_duration:.0f}ms", "none"
 
         # Check for silence (speech complete)
         silence_duration = 0
         if self._last_high_energy_time:
             silence_duration = (current_time - self._last_high_energy_time) * 1000
+            
+        logger.debug(f"🔍 BUFFER CHECK: speech_duration={speech_duration:.0f}ms, silence_duration={silence_duration:.0f}ms, buffer_size={buffer_size}")
 
         # Quick response mode: Small buffer + silence detection
         if (
@@ -1896,25 +1909,37 @@ class AudioSession:
 
             try:
                 # Handle async generator (Kokoro TTS yields bytes)
+                logger.info(f"🔍 TTS DEBUG: About to call asynthesize() for text: '{text[:30]}...'")
                 audio_generator = self.tts_service.asynthesize(text)
+                logger.info(f"🔍 TTS DEBUG: Got audio generator: {type(audio_generator)}")
+                
                 pcm_bytes = None
+                chunk_count = 0
                 async for audio_chunk in audio_generator:
+                    chunk_count += 1
+                    logger.info(f"🔍 TTS DEBUG: Got audio chunk #{chunk_count}: {type(audio_chunk)}, {len(audio_chunk) if audio_chunk else 'None'} bytes")
                     pcm_bytes = audio_chunk
                     break  # Get first chunk
+                
+                logger.info(f"🔍 TTS DEBUG: Final pcm_bytes: {type(pcm_bytes)}, {len(pcm_bytes) if pcm_bytes else 'None'} bytes")
                     
                 if pcm_bytes:
-                    return pcm_to_wav(
+                    wav_bytes = pcm_to_wav(
                         pcm_data=pcm_bytes,
                         sample_rate=24000,
                         num_channels=1,
                         bit_depth=16,
                     )
+                    logger.info(f"🔍 TTS DEBUG: Converted to WAV: {len(wav_bytes)} bytes")
+                    return wav_bytes
                 else:
                     logger.warning("⚠️ Kokoro TTS returned no audio data")
                     return b""  # No OpenAI fallback - return empty bytes
                     
             except Exception as e:
                 logger.error(f"❌ Kokoro TTS synthesis error: {e}")
+                import traceback
+                logger.error(f"❌ Kokoro TTS traceback: {traceback.format_exc()}")
                 return b""  # No OpenAI fallback - return empty bytes
 
         except Exception as e:
@@ -2181,7 +2206,9 @@ class AudioSession:
             audio_chunks = []
             for i, chunk_text, task in tts_tasks:
                 try:
+                    logger.info(f"🔍 BATCH TTS DEBUG: Waiting for chunk {i+1} task completion...")
                     audio_data = await task
+                    logger.info(f"🔍 BATCH TTS DEBUG: Chunk {i+1} returned: {type(audio_data)}, {len(audio_data) if audio_data else 'None'} bytes")
                     if audio_data:
                         audio_chunks.append((i, audio_data))
                         logger.info(
@@ -2191,6 +2218,8 @@ class AudioSession:
                         logger.warning(f"⚠️ TTS chunk {i+1} returned empty audio")
                 except Exception as e:
                     logger.error(f"❌ TTS chunk {i+1} failed: {e}")
+                    import traceback
+                    logger.error(f"❌ TTS chunk {i+1} traceback: {traceback.format_exc()}")
 
             # Sort chunks by original order
             audio_chunks.sort(key=lambda x: x[0])
@@ -2211,7 +2240,9 @@ class AudioSession:
 
             # 🎯 CONCATENATE: Merge all audio chunks into one continuous stream
             logger.info(f"🔄 Concatenating {len(audio_chunks)} audio chunks into single stream")
+            logger.info(f"🔍 CONCATENATION DEBUG: Audio chunks sizes: {[len(chunk) for chunk in audio_chunks]}")
             concatenated_audio = await self._concatenate_audio_chunks(audio_chunks)
+            logger.info(f"🔍 CONCATENATION DEBUG: Concatenated result: {type(concatenated_audio)}, {len(concatenated_audio) if concatenated_audio else 'None'} bytes")
 
             if not concatenated_audio:
                 logger.error("❌ Audio concatenation failed")
@@ -2226,22 +2257,27 @@ class AudioSession:
                     # Send as base64-encoded audio data
                     import base64
 
+                    logger.info(f"🔍 BATCH TTS DEBUG: About to base64 encode {len(concatenated_audio)} bytes")
                     audio_base64 = base64.b64encode(concatenated_audio).decode("utf-8")
+                    logger.info(f"🔍 BATCH TTS DEBUG: Base64 encoded to {len(audio_base64)} chars")
 
-                    await websocket.send_json(
-                        {
-                            "type": "audio_stream",
-                            "character": self.character,
-                            "audio_data": audio_base64,
-                            "audio_size_bytes": len(concatenated_audio),
-                            "audio_size_base64": len(audio_base64),
-                            "chunk_count": len(chunks),
-                            "is_concatenated": True,
-                            "conversation_state": self.conversation_state,
-                            "conversation_turn": self.conversation_turn_count,
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
+                    message_data = {
+                        "type": "audio_stream",
+                        "character": self.character,
+                        "audio": audio_base64,  # FIXED: Use 'audio' field like streaming version
+                        "audio_size_bytes": len(concatenated_audio),
+                        "audio_size_base64": len(audio_base64),
+                        "chunk_count": len(chunks),
+                        "is_concatenated": True,
+                        "conversation_state": self.conversation_state,
+                        "conversation_turn": self.conversation_turn_count,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                    logger.info(f"🔍 BATCH TTS DEBUG: About to send message with audio field length: {len(message_data.get('audio', ''))}")
+                    try:
+                        await websocket.send_json(message_data)
+                    except Exception as send_error:
+                        logger.warning(f"⚠️ Failed to send batch audio stream: {send_error}")
 
                     logger.info(
                         f"🎵 Sent concatenated audio stream: {len(concatenated_audio)} bytes, {len(audio_base64)} base64 chars"
