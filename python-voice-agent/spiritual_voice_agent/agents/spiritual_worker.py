@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Production Spiritual Guidance Agent Worker
-Runs continuously on Railway, spawning character instances when users join rooms
+Runs continuously on Render, spawning character instances when users join rooms
 Deployment: January 29, 2025 - Ensuring worker service is active alongside API
 """
 
@@ -16,8 +16,8 @@ from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, llm, stt, tts
+from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import deepgram, openai, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # CRITICAL: Sanitize environment variables to fix API key issues
 # Remove any trailing whitespace/newlines that cause "illegal header value" errors
@@ -37,20 +37,18 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout),
         (
             logging.FileHandler("spiritual_agent.log")
-            if not os.getenv("RAILWAY")
+            if not os.getenv("RENDER")
             else logging.StreamHandler(sys.stdout)
         ),
     ],
 )
 logger = logging.getLogger(__name__)
 
-# Turn detector - using new AI-powered MultilingualModel
-TURN_DETECTOR_AVAILABLE = True
-logger.info("🚀 Using AI-powered turn detection (MultilingualModel enabled)")
+# Turn detector removed - using stable VAD-based detection only
+TURN_DETECTOR_AVAILABLE = False
+logger.info("🔄 Using stable VAD-based turn detection (turn detector disabled)")
 
 from spiritual_voice_agent.characters.character_factory import CharacterFactory
-
-# Import our services - clean imports, no sys.path hacks!
 from spiritual_voice_agent.services.llm_service import create_gpt4o_mini
 from spiritual_voice_agent.services.tts_factory import TTSFactory
 
@@ -58,8 +56,7 @@ from spiritual_voice_agent.services.tts_factory import TTSFactory
 class SpiritualAgentWorker:
     """Production agent worker for spiritual guidance sessions"""
 
-    def __init__(self, tts_services):
-        self.tts_services = tts_services
+    def __init__(self):
         self.active_sessions: Dict[str, AgentSession] = {}
         self.shutdown_requested = False
 
@@ -90,6 +87,8 @@ class SpiritualAgentWorker:
 
     async def entrypoint(self, ctx: JobContext):
         """Main agent entry point - spawns character instances"""
+        from spiritual_voice_agent.services.tts_factory import TTSFactory
+        
         try:
             await ctx.connect()
             room_name = ctx.room.name
@@ -100,7 +99,7 @@ class SpiritualAgentWorker:
             # Extract character from room name
             character_name = self._extract_character_from_room(room_name)
 
-            if not character_name or character_name not in self.tts_services.keys():
+            if not character_name:
                 logger.warning(f"⚠️ Could not determine character from room name: {room_name}")
                 character_name = "adina"  # Default fallback
 
@@ -142,24 +141,18 @@ class SpiritualAgentWorker:
                     raise
 
             try:
-                # 🎙️ TTS SERVICE: Use configurable TTS factory for easy model swapping
+                # Create TTS service using factory
                 logger.info("🎙️ Creating TTS service with factory...")
-                tts_service = self.tts_services[character_name]
-                logger.info(f"THIS IS THE TTS: {tts_service}")
-                # Create TTS service - easily configurable via environment
+                tts_service = TTSFactory.create_tts(character_name)
                 logger.info(f"✅ TTS service created for {character_name}")
                 logger.info("🔧 TTS model configurable via TTS_MODEL environment variable")
 
             except Exception as e:
                 logger.error(f"❌ Failed to create TTS service: {e}")
-                # 🛡️ EMERGENCY FALLBACK: Basic OpenAI TTS
-                logger.info("🛡️ EMERGENCY: Using basic OpenAI TTS fallback")
-                try:
-                    tts_service = openai.TTS()  # Use absolute defaults
-                    logger.info("✅ Emergency TTS fallback created")
-                except Exception as emergency_e:
-                    logger.error(f"❌ Emergency fallback failed: {emergency_e}")
-                    raise Exception("All TTS services failed - cannot proceed")
+                # NO FALLBACKS - FAIL FAST TO PREVENT COST LEAKS
+                logger.error("🚨 SYSTEM FAILURE: Kokoro TTS required - no fallbacks allowed")
+                logger.error("💰 This prevents accidental OpenAI TTS costs")
+                raise Exception(f"Kokoro TTS failed: {e} - System refuses to continue with paid alternatives")
 
             logger.info(f"🚀 Services initialized for {character_name}")
             logger.info(f"   🎙️ TTS: {tts_service.__class__.__name__}")
@@ -175,9 +168,6 @@ class SpiritualAgentWorker:
                         min_speech_duration=0.02,  # Quick speech detection
                         min_silence_duration=0.05,  # Fast silence detection
                     ),
-                    turn_detector=MultilingualModel(
-                        unlikely_threshold=0.5,  # Sensitivity for turn detection
-                    ),
                     stt=stt_service,
                     llm=llm_service,
                     tts=tts_service,  # ElevenLabs or OpenAI TTS
@@ -188,18 +178,14 @@ class SpiritualAgentWorker:
                 )
                 logger.info("✅ Real-time session created with streaming TTS")
                 logger.info("🔗 TTS service properly wired into AgentSession pipeline")
-                logger.info("🚀 AI-powered turn detection enabled (MultilingualModel)")
 
                 # Log final configuration
-                from spiritual_voice_agent.services.tts_factory import get_tts_config
-
-                tts_config = get_tts_config()
+                tts_config = TTSFactory.get_tts_config()
                 logger.info(
-                    f"   🎙️ TTS: {tts_config['current_model']} ({tts_service.__class__.__name__})"
+                    f"   🎙️ TTS: {tts_config['provider']} ({tts_service.__class__.__name__})"
                 )
                 logger.info(f"   🎧 STT: Deepgram STT")
                 logger.info(f"   🧠 LLM: GPT-4o Mini (optimized)")
-                logger.info(f"   🚀 Turn Detection: AI-powered (MultilingualModel)")
                 logger.info(f"   ⚡ Target: Natural voice with streaming")
 
             except Exception as e:
@@ -209,16 +195,12 @@ class SpiritualAgentWorker:
                 try:
                     session = AgentSession(
                         vad=silero.VAD.load(),
-                        turn_detector=MultilingualModel(
-                            unlikely_threshold=0.5,  # Sensitivity for turn detection
-                        ),
                         stt=stt_service,
                         llm=llm_service,
                         tts=tts_service,
                         allow_interruptions=True,
                     )
                     logger.info("✅ Basic agent session created with TTS service")
-                    logger.info("🚀 AI-powered turn detection enabled (MultilingualModel)")
                 except Exception as fallback_e:
                     logger.error(f"❌ Basic agent session also failed: {fallback_e}")
                     raise
@@ -255,6 +237,14 @@ class SpiritualAgentWorker:
             try:
                 await session.start(agent=agent, room=ctx.room)
                 logger.info(f"✅ Session started for {character_name}")
+
+                # 🎤 SEND INITIAL GREETING - Agent speaks first!
+                greeting_text = self._get_character_greeting_text(character_name)
+                logger.info(f"🎤 Sending initial greeting: {greeting_text[:50]}...")
+                
+                # Make the agent speak the greeting immediately using correct LiveKit API
+                await session.generate_reply(instructions=f"Speak this greeting: {greeting_text}")
+                logger.info(f"✅ Initial greeting sent for {character_name}")
 
                 # Session started successfully - LLM will respond to user input automatically
                 logger.info(f"ℹ️ {character_name.title()} is ready to respond to user input")
@@ -366,15 +356,8 @@ class SpiritualAgentWorker:
         signal.signal(signal.SIGTERM, signal_handler)
 
 
-# Preload the TTS services for faster first inference
-logger.info("Creating TTS Services")
-tts_services = {
-    "rafa": TTSFactory.create_tts("rafa", model_override="kokoro"),
-    "adina": TTSFactory.create_tts("adina", model_override="kokoro"),
-}
-logger.info("TTS Services created successfully")
 # Global worker instance
-spiritual_worker = SpiritualAgentWorker(tts_services)
+spiritual_worker = SpiritualAgentWorker()
 
 
 async def entrypoint(ctx: JobContext):
@@ -382,6 +365,45 @@ async def entrypoint(ctx: JobContext):
     await spiritual_worker.entrypoint(ctx)
 
 
+# 🧪 TEST FUNCTION: Manual room dispatch
+async def test_manual_dispatch():
+    """Test function to manually create a room and dispatch agent"""
+    try:
+        logger.info("🧪 TESTING: Manual agent dispatch")
+        
+        # Create API client
+        from livekit import api
+        lk_api = api.LiveKitAPI()
+        
+        # Create a test room
+        test_room_name = "spiritual-adina-test-manual-dispatch"
+        logger.info(f"🧪 Creating test room: {test_room_name}")
+        
+        try:
+            await lk_api.room.create_room(
+                api.CreateRoomRequest(name=test_room_name)
+            )
+            logger.info(f"✅ Test room created: {test_room_name}")
+        except Exception as e:
+            logger.info(f"ℹ️ Room might already exist: {e}")
+        
+        # Manually dispatch agent
+        logger.info("🧪 Manually dispatching agent to test room...")
+        await lk_api.agent_dispatch.create_dispatch(
+            api.CreateAgentDispatchRequest(
+                room=test_room_name,
+                agent_name="",  # Use auto-dispatch agent (no specific name)
+            )
+        )
+        logger.info("✅ Manual dispatch completed - check if agent joins room!")
+        
+    except Exception as e:
+        logger.error(f"❌ Manual dispatch test failed: {e}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+
+
+# Add test to main function
 def main():
     """Main function for production deployment"""
     logger.info("🌟 Starting Spiritual Guidance Agent Worker")
@@ -390,14 +412,18 @@ def main():
     # Setup signal handlers for graceful shutdown
     spiritual_worker.setup_signal_handlers()
 
-    # Configure worker options for production with proper settings
+    # 🧪 UNCOMMENT TO TEST MANUAL DISPATCH:
+    # import asyncio
+    # asyncio.run(test_manual_dispatch())
+    # print("🧪 Manual dispatch completed. Now starting normal agent worker to see if it receives the dispatch...")
+    # Don't return - continue to start the normal agent worker
+
+    # Create worker with agent name for manual dispatch
     worker_options = WorkerOptions(
         entrypoint_fnc=entrypoint,
-        # Set a reasonable load threshold (default is 0.75)
+        agent_name="spiritual-agent",  # Enable manual dispatch (disables auto-dispatch)
         load_threshold=0.8,
-        # Allow time for graceful shutdown (30 minutes default)
-        drain_timeout=1800,  # 30 minutes in seconds
-        # Don't set permissions to None - let it use defaults
+        drain_timeout=1800,
     )
 
     try:
