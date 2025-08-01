@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import routes - no more sys.path hacks needed!
-from spiritual_voice_agent.routes import cost, metrics, token, websocket_audio
+from spiritual_voice_agent.routes import agent_dispatch, cost, metrics, token, websocket_audio
 
 
 @asynccontextmanager
@@ -108,6 +108,9 @@ app.include_router(token.router, prefix="/api", tags=["Authentication"])
 app.include_router(websocket_audio.router, tags=["WebSocket Audio"])
 app.include_router(metrics.router, tags=["Metrics"])
 app.include_router(cost.router, tags=["Cost Analytics"])
+
+# Add agent dispatch router (was missing!)
+app.include_router(agent_dispatch.router, prefix="/api", tags=["Agent Dispatch"])
 
 
 def main():

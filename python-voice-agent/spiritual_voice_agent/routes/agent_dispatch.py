@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 class DispatchAgentRequest(BaseModel):
     room_name: str
     character: Literal["adina", "raffa"]
-    user_id: str
-    user_name: str
+    user_id: str = "default_user"  # Make optional with default
+    user_name: str = "Mobile App User"  # Make optional with default
 
 
 class DispatchAgentResponse(BaseModel):
