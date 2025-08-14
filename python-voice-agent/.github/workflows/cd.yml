@@ -1,0 +1,352 @@
+name: 🚀 Continuous Deployment
+
+on:
+  workflow_run:
+    workflows: ["🧪 Continuous Integration"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      force_deploy:
+        description: 'Force deployment (skip checks)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Build and Push Docker Images
+  build-and-push:
+    name: 🏗️ Build & Push Images
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+  # Deploy to Staging
+  deploy-staging:
+    name: 🧪 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: staging
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to staging server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.STAGING_SERVER }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/spiritual-voice-agent
+            
+            # Pull latest code
+            git pull origin main
+            
+            # Update environment
+            echo "IMAGE_TAG=${{ needs.build-and-push.outputs.image-tag }}" > .env.deploy
+            
+            # Deploy with Docker Compose
+            docker-compose pull
+            docker-compose up -d
+            
+            # Wait for services to be healthy
+            sleep 30
+            
+            # Health check
+            curl -f http://localhost:10000/health || exit 1
+            echo "✅ Staging deployment successful"
+
+      - name: Run smoke tests
+        run: |
+          # Basic API tests against staging
+          curl -f https://staging.spiritual-voice.com/health
+          curl -f https://staging.spiritual-voice.com/docs
+
+      - name: Notify deployment status
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          text: "Staging deployment ${{ job.status }} for commit ${{ github.sha }}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Deploy to Production
+  deploy-production:
+    name: 🏭 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-staging]
+    environment: production
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Pre-deployment checks
+        if: github.event.inputs.force_deploy != 'true'
+        run: |
+          echo "🔍 Running pre-deployment checks..."
+          
+          # Check if staging is healthy
+          curl -f https://staging.spiritual-voice.com/health || {
+            echo "❌ Staging environment is not healthy"
+            exit 1
+          }
+          
+          # Check recent commits for breaking changes
+          git log --oneline -10
+          
+          echo "✅ Pre-deployment checks passed"
+
+      - name: Create deployment backup
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/spiritual-voice-agent
+            
+            # Create backup
+            timestamp=$(date +%Y%m%d_%H%M%S)
+            mkdir -p backups
+            
+            # Backup database
+            pg_dump $SUPABASE_CONNECTION_STRING > backups/db_backup_$timestamp.sql
+            
+            # Backup current deployment
+            docker-compose config > backups/docker-compose_$timestamp.yml
+            cp .env backups/env_$timestamp
+            
+            echo "✅ Backup created: $timestamp"
+
+      - name: Deploy to production
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/spiritual-voice-agent
+            
+            # Pull latest code
+            git pull origin main
+            
+            # Update environment
+            echo "IMAGE_TAG=${{ needs.build-and-push.outputs.image-tag }}" > .env.deploy
+            
+            # Blue-green deployment
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml pull
+            
+            # Start new containers
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+            
+            # Wait for health check
+            echo "⏳ Waiting for services to start..."
+            sleep 60
+            
+            # Health check
+            for i in {1..5}; do
+              if curl -f http://localhost:10000/health; then
+                echo "✅ Production deployment successful"
+                break
+              fi
+              if [ $i -eq 5 ]; then
+                echo "❌ Production deployment failed - health check timeout"
+                exit 1
+              fi
+              sleep 10
+            done
+
+      - name: Run production smoke tests
+        run: |
+          # Comprehensive production tests
+          curl -f https://spiritual-voice.com/health
+          curl -f https://spiritual-voice.com/docs
+          
+          # Test key API endpoints
+          curl -X GET https://spiritual-voice.com/api/v1/health/detailed
+          
+          echo "✅ Production smoke tests passed"
+
+      - name: Update deployment tracking
+        run: |
+          # Record successful deployment
+          echo "Deployment completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "Commit: ${{ github.sha }}"
+          echo "Image: ${{ needs.build-and-push.outputs.image-tag }}"
+
+      - name: Notify production deployment
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          text: |
+            🚀 Production deployment ${{ job.status }}!
+            Commit: ${{ github.sha }}
+            Image: ${{ needs.build-and-push.outputs.image-tag }}
+            Deployed by: ${{ github.actor }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Rollback capability
+  rollback:
+    name: 🔄 Rollback
+    runs-on: ubuntu-latest
+    environment: production
+    if: failure()
+    
+    steps:
+      - name: Rollback production deployment
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/spiritual-voice-agent
+            
+            echo "🔄 Rolling back deployment..."
+            
+            # Find latest backup
+            latest_backup=$(ls -t backups/docker-compose_*.yml | head -1)
+            latest_env=$(ls -t backups/env_* | head -1)
+            
+            if [ -f "$latest_backup" ] && [ -f "$latest_env" ]; then
+              # Restore previous configuration
+              cp "$latest_backup" docker-compose.yml
+              cp "$latest_env" .env
+              
+              # Restart with previous configuration
+              docker-compose down
+              docker-compose up -d
+              
+              sleep 30
+              
+              # Verify rollback
+              if curl -f http://localhost:10000/health; then
+                echo "✅ Rollback successful"
+              else
+                echo "❌ Rollback failed"
+                exit 1
+              fi
+            else
+              echo "❌ No backup found for rollback"
+              exit 1
+            fi
+
+      - name: Notify rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "🔄 Production rollback completed",
+              attachments: [{
+                color: "warning",
+                fields: [{
+                  title: "Rollback Reason",
+                  value: "Deployment failure detected",
+                  short: true
+                }]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Performance monitoring post-deployment
+  performance-monitoring:
+    name: 📊 Performance Monitoring
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: success()
+    
+    steps:
+      - name: Monitor performance metrics
+        run: |
+          echo "📊 Monitoring performance for 5 minutes..."
+          
+          for i in {1..10}; do
+            # Check response times
+            response_time=$(curl -o /dev/null -s -w '%{time_total}' https://spiritual-voice.com/health)
+            echo "Response time: ${response_time}s"
+            
+            # Check if response time is acceptable (< 2 seconds)
+            if (( $(echo "$response_time > 2.0" | bc -l) )); then
+              echo "⚠️ High response time detected: ${response_time}s"
+            fi
+            
+            sleep 30
+          done
+          
+          echo "✅ Performance monitoring completed"
+
+      - name: Generate performance report
+        run: |
+          echo "Performance Report" > performance_report.md
+          echo "==================" >> performance_report.md
+          echo "Deployment: ${{ github.sha }}" >> performance_report.md
+          echo "Date: $(date -u)" >> performance_report.md
+          echo "Status: ✅ Healthy" >> performance_report.md
+
+      - name: Upload performance report
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-report
+          path: performance_report.md

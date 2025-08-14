@@ -4,5 +4,4 @@ python-multipart
 soundfile
 numpy
 torch
-kokoro
 httpx 

@@ -7,10 +7,12 @@ This supplements auto-dispatch for more reliable agent management.
 """
 
 import logging
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, validator
 from typing import Literal
 from livekit import api
+
+from spiritual_voice_agent.services.auth import verify_api_key
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -18,9 +20,20 @@ logger = logging.getLogger(__name__)
 
 class DispatchAgentRequest(BaseModel):
     room_name: str
-    character: Literal["adina", "raffa"]
+    character: str  # Accept any string, validate in custom validator
     user_id: str = "default_user"  # Make optional with default
     user_name: str = "Mobile App User"  # Make optional with default
+
+    @validator("character")
+    def validate_character(cls, v):
+        # Normalize character name for production compatibility
+        char = v.lower().strip()
+        if char in ["adina"]:
+            return "adina"
+        elif char in ["raffa", "rafa"]:  # Accept both spellings
+            return "raffa"
+        else:
+            raise ValueError("Character must be 'adina', 'raffa', or 'rafa'")
 
 
 class DispatchAgentResponse(BaseModel):
@@ -30,7 +43,7 @@ class DispatchAgentResponse(BaseModel):
 
 
 @router.post("/dispatch-agent", response_model=DispatchAgentResponse)
-async def dispatch_agent(request: DispatchAgentRequest):
+async def dispatch_agent(request: DispatchAgentRequest, _: bool = Depends(verify_api_key)):
     """
     Manually dispatch an agent to a specific room
     

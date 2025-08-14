@@ -1,0 +1,364 @@
+name: 📦 Release Management
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+      release_type:
+        description: 'Type of release'
+        required: true
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+          - prerelease
+      changelog:
+        description: 'Release notes'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Create Release
+  create-release:
+    name: 📦 Create Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install bump2version
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event.inputs.version }}" != "" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # Auto-increment based on release type
+            case "${{ github.event.inputs.release_type }}" in
+              major)
+                VERSION=$(bump2version --dry-run --list major | grep new_version | cut -d= -f2)
+                ;;
+              minor)
+                VERSION=$(bump2version --dry-run --list minor | grep new_version | cut -d= -f2)
+                ;;
+              patch)
+                VERSION=$(bump2version --dry-run --list patch | grep new_version | cut -d= -f2)
+                ;;
+              prerelease)
+                VERSION=$(bump2version --dry-run --list prerelease | grep new_version | cut -d= -f2)
+                ;;
+            esac
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update version
+        run: |
+          # Update version in pyproject.toml
+          sed -i 's/version = ".*"/version = "${{ steps.version.outputs.version }}"/' pyproject.toml
+          
+          # Update version in __init__.py
+          echo '__version__ = "${{ steps.version.outputs.version }}"' > spiritual_voice_agent/__init__.py
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          if [ "${{ github.event.inputs.changelog }}" != "" ]; then
+            echo "changelog=${{ github.event.inputs.changelog }}" >> $GITHUB_OUTPUT
+          else
+            # Auto-generate changelog from commits
+            last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ "$last_tag" != "" ]; then
+              changelog=$(git log $last_tag..HEAD --pretty=format:"- %s" --no-merges)
+            else
+              changelog=$(git log --pretty=format:"- %s" --no-merges)
+            fi
+            echo "changelog<<EOF" >> $GITHUB_OUTPUT
+            echo "$changelog" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit version changes
+        run: |
+          git add pyproject.toml spiritual_voice_agent/__init__.py
+          git commit -m "🔖 Bump version to ${{ steps.version.outputs.version }}"
+          git tag ${{ steps.version.outputs.tag }}
+
+      - name: Push changes
+        run: |
+          git push origin main
+          git push origin ${{ steps.version.outputs.tag }}
+
+  # Build Release Assets
+  build-release:
+    name: 🏗️ Build Release Assets
+    runs-on: ubuntu-latest
+    needs: create-release
+    if: always() && (needs.create-release.result == 'success' || github.event_name == 'push')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build package
+        run: |
+          python -m build
+
+      - name: Build documentation
+        run: |
+          pip install -r requirements.txt
+          pip install sphinx sphinx-rtd-theme
+          
+          # Generate API documentation
+          mkdir -p docs
+          sphinx-quickstart -q -p "Spiritual Voice Agent" -a "Team" -v "1.0" docs
+          
+          # Build docs
+          cd docs && make html
+
+      - name: Create release archive
+        run: |
+          mkdir -p release-assets
+          
+          # Create source archive
+          tar -czf release-assets/spiritual-voice-agent-source.tar.gz \
+            --exclude='.git' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='venv' \
+            --exclude='logs' \
+            .
+          
+          # Copy built packages
+          cp dist/* release-assets/
+          
+          # Create Docker deployment package
+          tar -czf release-assets/docker-deployment.tar.gz \
+            docker-compose.yml \
+            docker-compose.dev.yml \
+            Dockerfile \
+            .dockerignore \
+            scripts/ \
+            DOCKER_DEPLOYMENT_GUIDE.md
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-assets
+          path: release-assets/
+
+  # Docker Release Images
+  docker-release:
+    name: 🐳 Docker Release Images
+    runs-on: ubuntu-latest
+    needs: create-release
+    if: always() && (needs.create-release.result == 'success' || github.event_name == 'push')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION="${{ needs.create-release.outputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build and push release images
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:stable
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Create GitHub Release
+  github-release:
+    name: 🚀 GitHub Release
+    runs-on: ubuntu-latest
+    needs: [create-release, build-release, docker-release]
+    if: always() && needs.build-release.result == 'success'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download release assets
+        uses: actions/download-artifact@v3
+        with:
+          name: release-assets
+          path: release-assets/
+
+      - name: Get version info
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+            TAG=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="${{ needs.create-release.outputs.version }}"
+            TAG="${{ needs.create-release.outputs.tag }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release_notes.md << EOF
+          # Spiritual Voice Agent ${{ steps.version.outputs.version }}
+          
+          ## 🎯 What's New
+          
+          ${{ needs.create-release.outputs.changelog || 'Release notes not provided' }}
+          
+          ## 📦 Installation
+          
+          ### Docker (Recommended)
+          \`\`\`bash
+          docker pull ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+          \`\`\`
+          
+          ### From Source
+          \`\`\`bash
+          pip install spiritual-voice-agent==${{ steps.version.outputs.version }}
+          \`\`\`
+          
+          ## 🔧 Deployment
+          
+          See the [Docker Deployment Guide](DOCKER_DEPLOYMENT_GUIDE.md) for complete deployment instructions.
+          
+          ## 📊 What's Included
+          
+          - 🎤 Production-ready voice agent system
+          - 🎓 LLM training data collection
+          - 📊 Enterprise monitoring and analytics
+          - 🔐 Supabase authentication integration
+          - 🐳 Complete Docker deployment setup
+          - 🚀 CI/CD pipeline for automated deployment
+          
+          ## 🔗 Quick Links
+          
+          - [Documentation](https://github.com/${{ github.repository }}/blob/main/README.md)
+          - [Docker Guide](https://github.com/${{ github.repository }}/blob/main/DOCKER_DEPLOYMENT_GUIDE.md)
+          - [API Documentation](https://your-domain.com/docs)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            release-assets/*
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, 'rc') || contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'alpha') }}
+
+  # Notify Release
+  notify-release:
+    name: 📢 Notify Release
+    runs-on: ubuntu-latest
+    needs: [github-release]
+    if: success()
+    
+    steps:
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "🎉 New Release: Spiritual Voice Agent ${{ needs.create-release.outputs.version }}",
+              attachments: [{
+                color: "good",
+                fields: [
+                  {
+                    title: "Version",
+                    value: "${{ needs.create-release.outputs.version }}",
+                    short: true
+                  },
+                  {
+                    title: "Docker Image",
+                    value: "ghcr.io/${{ github.repository }}:${{ needs.create-release.outputs.version }}",
+                    short: false
+                  }
+                ],
+                actions: [{
+                  type: "button",
+                  text: "View Release",
+                  url: "https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.tag }}"
+                }]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: Update deployment tracking
+        run: |
+          echo "🎉 Release ${{ needs.create-release.outputs.version }} created successfully"
+          echo "📦 Docker images pushed to registry"
+          echo "📋 Release assets uploaded to GitHub"
+          echo "🔔 Notifications sent"

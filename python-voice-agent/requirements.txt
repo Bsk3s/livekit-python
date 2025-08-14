@@ -1,42 +1,57 @@
-# Core Web Framework
-fastapi>=0.100.0
-uvicorn[standard]>=0.20.0
-pydantic>=2.0.0
+# Production Voice Agent Dependencies
 
-# LiveKit Voice Agent Framework (let it manage its own dependencies)
-livekit-agents[deepgram,openai,silero]>=1.1.6
-livekit-plugins-turn-detector>=1.1.6
+# Core Dependencies
+fastapi==0.115.7
+uvicorn[standard]==0.33.0
+pydantic==2.11.0
+python-dotenv==1.0.1
 
-# AI Services
-openai>=1.93.0
-deepgram-sdk>=4.5.0
-anthropic>=0.56.0
+# LiveKit Voice Agent Framework
+livekit-agents==1.2.2
+livekit-agents-cli==1.2.2
+livekit-api==0.18.8
+livekit-rtc==0.13.3
 
-# TTS Models
-kokoro
-soundfile>=0.13.1
+# OpenAI Integration
+openai==1.61.0
 
-# ML Dependencies for AI Turn Detection
-torch>=2.0.0
-transformers>=4.30.0
+# Deepgram Integration  
+deepgram-sdk==3.8.5
 
-# Audio Processing Essentials
-numpy>=2.0.0
-scipy>=1.16.0
+# Database Support
+asyncpg==0.30.0  # PostgreSQL async driver
+aiosqlite==0.20.0  # SQLite async support
 
-# HTTP & WebSocket
-aiohttp>=3.12.0
-websockets>=15.0.0
+# Monitoring & Metrics
+prometheus-client==0.21.2
+psutil==7.0.0  # System monitoring
 
-# Environment & Config
-python-dotenv>=1.0.0
-pydantic-settings>=2.0.0
+# Security & Encryption
+cryptography==44.0.0  # AES encryption for backups
+python-jose[cryptography]==3.5.0  # JWT token decoding for Supabase auth
+supabase==2.17.0  # Real Supabase client for live data operations
 
-# Logging
-structlog>=25.0.0
+# HTTP Client
+httpx==0.28.1
 
-# Development & Testing (optional)
-pytest>=8.0.0
-pytest-asyncio>=1.0.0
-black>=25.0.0
-isort>=6.0.0
+# Audio Processing
+numpy==2.2.1
+scipy==1.15.0
+
+# Development/Testing
+pytest==8.4.1
+pytest-asyncio==1.1.0
+pytest-mock==3.14.1
+pytest-cov==6.2.1
+pytest-timeout==2.4.0
+
+# Load Testing
+locust==2.37.14
+
+# Code Quality
+black==25.1.0
+ruff==0.9.3
+
+# Documentation
+mkdocs==1.7.1
+mkdocs-material==9.5.57

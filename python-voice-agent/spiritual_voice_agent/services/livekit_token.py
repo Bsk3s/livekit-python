@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 def get_livekit_credentials():
     """Get LiveKit credentials from environment variables"""
-    api_key = os.environ["LIVEKIT_API_KEY"]
-    api_secret = os.environ["LIVEKIT_API_SECRET"]
+    api_key = os.getenv("LIVEKIT_API_KEY")
+    api_secret = os.getenv("LIVEKIT_API_SECRET")
 
     if not api_key or not api_secret:
         raise ValueError(

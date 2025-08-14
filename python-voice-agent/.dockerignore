@@ -1,92 +1,99 @@
-# flyctl launch added from .gitignore
 # Python
-**/venv
-**/venv*
-**/__pycache__
-**/*.pyc
-**/*.pyo
-**/*.pyd
-**/.Python
-**/build
-**/develop-eggs
-**/dist
-**/downloads
-**/eggs
-**/.eggs
-**/lib
-**/lib64
-**/parts
-**/sdist
-**/var
-**/wheels
-**/*.egg-info
-**/.installed.cfg
-**/*.egg
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Environment variables
-**/.env
-**/.env.local
-**/.env.development.local
-**/.env.test.local
-**/.env.production.local
+# Virtual environments
+venv/
+env/
+ENV/
 
-# IDE
-**/.vscode
-**/.idea
-**/*.swp
-**/*.swo
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # OS
-**/.DS_Store
-**/.DS_Store?
-**/._*
-**/.Spotlight-V100
-**/.Trashes
-**/ehthumbs.db
-**/Thumbs.db
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
 
 # Logs
-**/*.log
-**/logs
-**/npm-debug.log*
-**/yarn-debug.log*
-**/yarn-error.log*
+logs/*.log
+*.log
 
-# Testing
-**/.pytest_cache
-**/.coverage
-**/htmlcov
-**/.tox
-**/.cache
-**/nosetests.xml
-**/coverage.xml
-**/*.cover
-**/.hypothesis
+# Documentation
+*.md
+docs/
 
-# Audio files (test artifacts)
-**/*.wav
-**/*.mp3
-**/*.ogg
-**/*.m4a
+# Tests
+tests/
+__tests__/
+*.test.js
+*.spec.js
 
 # Temporary files
-**/*.tmp
-**/*.temp
-**/temp
-**/tmp
+tmp/
+temp/
+.tmp/
 
-# LiveKit specific
-**/livekit-cli.tar.gz
+# Node modules (if any)
+node_modules/
 
-# Deployment
-**/backend.log
-**/spiritual_agent.log
+# Environment files (will be mounted as volume)
+.env
+.env.*
 
-# Model files
-**/*.onnx
-**/*.bin
+# Cache
+.cache/
+.pytest_cache/
 
-# flyctl launch added from .pytest_cache/.gitignore
-# Created by pytest automatically.
-.pytest_cache/**/*
-fly.toml
+# Coverage
+coverage/
+.coverage
+htmlcov/
+
+# Database
+*.db
+*.sqlite3
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Other
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore

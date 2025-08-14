@@ -4,20 +4,32 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, validator
 
 from spiritual_voice_agent.services.livekit_token import create_spiritual_access_token
+from spiritual_voice_agent.services.auth import verify_api_key
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
 class SpiritualTokenRequest(BaseModel):
-    character: Literal["adina", "raffa"]
+    character: str  # Accept any string, validate in custom validator
     user_id: str
     user_name: str
     session_duration_minutes: int = 30  # Default 30 minute sessions
+
+    @validator("character")
+    def validate_character(cls, v):
+        # Normalize character name for production compatibility
+        char = v.lower().strip()
+        if char in ["adina"]:
+            return "adina"
+        elif char in ["raffa", "rafa"]:  # Accept both spellings
+            return "raffa"
+        else:
+            raise ValueError("Character must be 'adina', 'raffa', or 'rafa'")
 
     @validator("user_name")
     def validate_user_name(cls, v):
@@ -47,7 +59,7 @@ class TokenResponse(BaseModel):
 
 
 @router.post("/spiritual-token", response_model=TokenResponse)
-async def create_spiritual_token(request: SpiritualTokenRequest):
+async def create_spiritual_token(request: SpiritualTokenRequest, _: bool = Depends(verify_api_key)):
     """
     Create a LiveKit access token for spiritual guidance sessions
 
@@ -129,9 +141,14 @@ async def generate_token_expo(request: dict):
         identity = request.get("identity", "anonymous")
         character = request.get("character", "adina")
 
-        # Validate character
-        if character not in ["adina", "raffa"]:
+        # Normalize character name (accept both "Rafa" and "raffa")
+        char = character.lower().strip()
+        if char in ["adina"]:
             character = "adina"
+        elif char in ["raffa", "rafa"]:
+            character = "raffa"
+        else:
+            character = "adina"  # Default fallback
 
         # Convert to spiritual request format
         spiritual_request = SpiritualTokenRequest(

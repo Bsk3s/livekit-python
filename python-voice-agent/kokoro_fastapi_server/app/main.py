@@ -20,17 +20,17 @@ app = FastAPI(title="Kokoro TTS FastAPI Server", version="1.0.0")
 # Add CORS middleware for frontend connections
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://localhost:10000", "https://yourapp.com"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # Initialize Kokoro model (singleton)
 kokoro_model = None
 VOICE_MAP = {
     "adina": "af_heart",
-    "raffa": "am_adam",
+    "raffa": "am_michael",  # Updated to Michael's voice per user preference
     "default": "af_heart"
 }
 
@@ -84,7 +84,13 @@ async def synthesize(
         model = get_kokoro_model()
         
         # Map voice name to Kokoro voice
-        kokoro_voice = VOICE_MAP.get(voice.lower(), VOICE_MAP["default"])
+        # First check if it's a raw Kokoro voice model name (for voice samples)
+        if voice.startswith("am_") or voice.startswith("af_"):
+            kokoro_voice = voice  # Use raw voice model name directly
+            logger.info(f"🎵 Using raw Kokoro voice model: {kokoro_voice}")
+        else:
+            kokoro_voice = VOICE_MAP.get(voice.lower(), VOICE_MAP["default"])
+            logger.info(f"🎭 Using mapped voice: {voice} -> {kokoro_voice}")
         
         # Generate audio with Kokoro
         # Use the correct KPipeline calling pattern
@@ -139,4 +145,4 @@ async def list_voices():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000) 
+    uvicorn.run(app, host="0.0.0.0", port=8001) 

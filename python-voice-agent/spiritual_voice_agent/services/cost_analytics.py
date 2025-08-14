@@ -5,10 +5,11 @@ This service handles cost calculation and analytics storage completely separate
 from the voice processing pipeline to ensure zero latency impact on conversations.
 
 Key Features:
-- SQLite database for cost analytics (easy deployment, no config needed)
+- Database abstraction (SQLite for dev, PostgreSQL for production)
 - Async background processing (voice pipeline never waits)
 - Accurate cost calculations using 2025 pricing
 - Event-driven architecture for real-time insights
+- Connection pooling for high-performance production workloads
 
 Author: Voice Agent Team
 """
@@ -24,6 +25,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 import threading
 from queue import Queue, Empty
+
+from .database import get_database_adapter, DatabaseAdapter, DatabaseConfig
+from ..config.environment import get_config
 
 logger = logging.getLogger(__name__)
 

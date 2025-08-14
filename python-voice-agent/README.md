@@ -1,15 +1,50 @@
-# 🌟 Spiritual Guidance Voice Agent
+# 🌟 Python Voice Agent
 
-A **production-ready** LiveKit voice agent providing spiritual guidance through AI-powered conversations with two distinct characters: **Adina** (compassionate) and **Raffa** (wise).
+🚀 **Production-ready voice AI system** with **ZERO TTS costs** using Kokoro TTS
+
+A **professional** LiveKit voice agent with custom Text-to-Speech integration, multiple character voices, and real-time conversational capabilities featuring **Adina** (compassionate) and **Raffa** (wise).
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
 [![LiveKit](https://img.shields.io/badge/LiveKit-Agents-purple.svg)](https://livekit.io)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Kokoro TTS](https://img.shields.io/badge/TTS-Kokoro-orange.svg)](https://huggingface.co/hexgrad/Kokoro-82M)
 
-> **Professional Python Package** - Properly structured, pip-installable, and production-ready.
+> **📚 Complete Learning Journey:** See [`LEARNINGS.md`](LEARNINGS.md) for comprehensive technical documentation
 
-## 🚀 Quick Start
+## ⚡ ONE-COMMAND STARTUP
+
+**Start everything with a single command:**
+
+```bash
+./start.sh
+```
+
+That's it! The script automatically:
+- ✅ Sets up virtual environments
+- ✅ Installs all dependencies  
+- ✅ Starts Kokoro TTS Server (port 8001)
+- ✅ Starts Main API Server (port 10000)
+- ✅ Performs health checks
+- ✅ Shows all available endpoints
+
+**🔗 Available immediately:**
+- **📖 API Documentation:** http://localhost:10000/docs
+- **❤️ Health Check:** http://localhost:10000/health  
+- **🎭 Voice Characters:** http://localhost:10000/api/voice/characters
+- **🔄 Voice Switching:** http://localhost:10000/api/voice/switch
+
+## 💰 Cost Analysis
+
+- **TTS:** $0.00 (Kokoro local synthesis) 🆓
+- **LLM:** ~$0.002 per conversation (GPT-4o-mini)  
+- **STT:** ~$0.0043 per minute (Deepgram Nova-2)
+
+**vs. Alternatives:**
+- OpenAI TTS: $15.00 per 1000 sentences
+- ElevenLabs: $18.00 per 1000 sentences  
+- **Kokoro TTS: $0.00** ✅
+
+## 🚀 Legacy Quick Start (if needed)
 
 ### Prerequisites
 - **Python 3.11+** (recommended: 3.11 or 3.12)
