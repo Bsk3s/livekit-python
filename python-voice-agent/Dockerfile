@@ -37,5 +37,5 @@ EXPOSE $PORT
 HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:${PORT:-10000}/health || exit 1
 
-# Debug: Just list files for now
-CMD ["sh", "-c", "echo 'Container starting...' && pwd && ls -la && echo 'Looking for startup.py...' && find . -name 'startup.py' && echo 'Done.'"]# Force rebuild Fri Aug 15 17:41:34 EDT 2025
+# Use unified starter that handles both platforms
+CMD ["python", "start_unified_service.py"]
