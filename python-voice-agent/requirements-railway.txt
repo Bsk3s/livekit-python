@@ -1,53 +1,24 @@
-# 🚀 RAILWAY-OPTIMIZED REQUIREMENTS (CPU-only, lightweight)
-# FastAPI Core
-fastapi>=0.100.0
-uvicorn[standard]>=0.20.0
-pydantic>=2.0.0
+# Railway-optimized requirements - tested versions
+fastapi==0.115.7
+uvicorn[standard]==0.33.0
+pydantic==2.11.0
+python-dotenv==1.0.1
 
-# LiveKit (complete stack for voice agents)
-livekit>=0.16.0
-livekit-api>=0.16.0
-livekit-agents>=0.16.0
-livekit-plugins-openai>=0.16.0
-livekit-plugins-deepgram>=0.16.0
-livekit-plugins-silero>=0.16.0
+# LiveKit - use exact working versions
+livekit-agents==1.2.2
+livekit-agents-cli==1.2.2
+livekit-api==0.18.8
+livekit-rtc==0.13.3
 
-# OpenAI for LLM + TTS (no local models needed)
-openai>=1.93.0
+# OpenAI
+openai==1.61.0
 
-# Audio processing (removed audioop-lts - not needed for Railway deployment)
+# Deepgram for STT
+deepgram-sdk==3.8.5
 
-# Database & Analytics
-httpx>=0.27.0
-aiohttp>=3.12.0
-websockets>=15.0.0
-python-dotenv>=1.0.0
-pydantic-settings>=2.0.0
-
-# Monitoring & Logging
-structlog>=25.0.0
-
-# Development tools (minimal)
-pytest>=8.0.0
-black>=25.0.0
-isort>=6.0.0
-
-# Essential utilities
-numpy>=2.0.0
-scipy>=1.16.0
-
-# System monitoring (for health service)
-psutil>=6.0.0
-
-# Supabase for database (required for conversation tracking)
-supabase>=2.0.0
-
-# Additional utilities for dashboard
-python-dateutil>=2.8.0
-
-# NO HEAVY DEPENDENCIES:
-# - No torch (saves 2GB+)
-# - No transformers
-# - No nvidia packages  
-# - No kokoro (use OpenAI TTS)
-# - No deepgram (use OpenAI STT)
+# Essential dependencies
+httpx==0.28.1
+numpy==2.2.1
+scipy==1.15.0
+psutil==7.0.0
+supabase==2.17.0
