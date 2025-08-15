@@ -1,0 +1,5 @@
+[build]
+builder = "dockerfile"
+
+[start]
+cmd = "python startup.py"

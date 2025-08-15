@@ -16,7 +16,7 @@ def start_api_server():
         sys.executable, "-m", "uvicorn",
         "spiritual_voice_agent.main_minimal:app",
         "--host", "0.0.0.0",
-        "--port", port,
+        "--port", str(port),
         "--workers", "1"
     ]
     
