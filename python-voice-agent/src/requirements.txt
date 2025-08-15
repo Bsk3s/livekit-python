@@ -1,0 +1,13 @@
+# Production requirements for Render/Railway
+fastapi==0.115.7
+uvicorn[standard]==0.33.0
+pydantic==2.11.0
+python-dotenv==1.0.1
+livekit-agents==1.2.2
+livekit-api==0.18.8
+openai==1.61.0
+deepgram-sdk==3.8.5
+httpx==0.28.1
+supabase==2.17.0
+numpy==2.2.1
+psutil==7.0.0
