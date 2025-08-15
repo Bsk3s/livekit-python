@@ -37,5 +37,5 @@ EXPOSE $PORT
 HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:${PORT:-10000}/health || exit 1
 
-# Use direct Python execution to avoid shell issues
-CMD ["python", "startup.py"]
+# Debug: List files and then run startup
+CMD ["sh", "-c", "ls -la /app/ && python /app/startup.py"]
