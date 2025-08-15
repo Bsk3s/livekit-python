@@ -1,56 +1,80 @@
 #!/usr/bin/env python3
 """
-Unified service starter for cloud deployment (Render/Railway)
+Root level wrapper for Render deployment
+Changes to src directory and runs the actual start script
 """
 import os
 import sys
 import subprocess
 
-def find_and_run_startup():
-    """Find startup.py and run it from the correct location"""
+def main():
+    print("🚀 Root Level Wrapper - Starting Voice Agent Service...")
+    print(f"📍 Current working directory: {os.getcwd()}")
+    print(f"📁 Python executable: {sys.executable}")
     
-    # Possible locations for startup.py
-    possible_paths = [
-        "startup.py",                    # Current directory
-        "./startup.py",                  # Explicit current
-        "/app/startup.py",              # Docker path (Railway)
-        "/opt/render/project/src/startup.py",  # Render path
-        os.path.join(os.path.dirname(__file__), "startup.py"),  # Same dir as this file
-    ]
-    
-    print("🔍 Searching for startup.py...")
-    print(f"Current working directory: {os.getcwd()}")
-    print(f"This file location: {__file__}")
-    
-    # List all files in current directory
-    print("Files in current directory:")
+    # Show what's in the current directory
+    print("🔍 Contents of current directory:")
     try:
-        for f in os.listdir("."):
-            print(f"  - {f}")
+        for item in sorted(os.listdir('.')):
+            item_path = os.path.join('.', item)
+            if os.path.isdir(item_path):
+                print(f"   📁 {item}/")
+            else:
+                print(f"   📄 {item}")
     except Exception as e:
-        print(f"  Error listing files: {e}")
+        print(f"   ❌ Error listing directory: {e}")
     
-    # Try each possible path
-    for path in possible_paths:
-        print(f"Trying: {path}")
-        if os.path.exists(path):
-            print(f"✅ Found startup.py at: {path}")
+    # Check if src directory exists and what's in it
+    if os.path.exists('src'):
+        print("🔍 Contents of src directory:")
+        try:
+            for item in sorted(os.listdir('src')):
+                item_path = os.path.join('src', item)
+                if os.path.isdir(item_path):
+                    print(f"   📁 {item}/")
+                else:
+                    print(f"   📄 {item}")
+        except Exception as e:
+            print(f"   ❌ Error listing src directory: {e}")
+        
+        # Try to run the script from src directory
+        src_script = os.path.join('src', 'start_unified_service.py')
+        if os.path.exists(src_script):
+            print(f"✅ Found script at: {src_script}")
+            print("🔄 Changing to src directory and running script...")
             try:
-                # Run it directly with Python
-                result = subprocess.run([sys.executable, path], check=True)
+                # Change to src directory and run the script
+                os.chdir('src')
+                print(f"📍 New working directory: {os.getcwd()}")
+                
+                # Run the actual start script
+                result = subprocess.run([sys.executable, 'start_unified_service.py'], check=True)
                 return True
             except Exception as e:
-                print(f"❌ Error running {path}: {e}")
-                continue
+                print(f"❌ Error running script: {e}")
+                return False
         else:
-            print(f"❌ Not found: {path}")
+            print(f"❌ Script not found at: {src_script}")
+    else:
+        print("❌ src directory not found!")
     
-    print("❌ Could not find startup.py anywhere!")
+    # Fallback: try to find and run startup.py directly
+    print("🔍 Looking for startup.py as fallback...")
+    for root, dirs, files in os.walk('.'):
+        if 'startup.py' in files:
+            startup_path = os.path.join(root, 'startup.py')
+            print(f"✅ Found startup.py at: {startup_path}")
+            try:
+                result = subprocess.run([sys.executable, startup_path], check=True)
+                return True
+            except Exception as e:
+                print(f"❌ Error running startup.py: {e}")
+                continue
+    
+    print("💀 Could not find or run any startup script!")
     return False
 
 if __name__ == "__main__":
-    print("🚀 Starting Unified Voice Agent Service...")
-    
-    if not find_and_run_startup():
+    if not main():
         print("💀 Failed to start - exiting")
         sys.exit(1)
