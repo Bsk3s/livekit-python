@@ -1,22 +1,18 @@
-# 🚀 Spiritual Voice Agent - Production Dependencies
-# Core web framework
-fastapi==0.115.7
-uvicorn[standard]==0.33.0
-pydantic==2.11.0
+# Voice Agent Core Dependencies - Working Versions
+livekit-agents==1.2.5
+livekit-plugins-openai==1.2.5
+livekit-plugins-silero==1.2.5
+livekit-api==1.0.5
+openai>=1.99.2
+deepgram-sdk==4.8.1
+
+# Supporting libraries
 python-dotenv==1.0.1
-
-# LiveKit voice agent framework
-livekit-agents==1.2.2
-livekit-api==0.18.8
-
-# AI services
-openai==1.61.0
-deepgram-sdk==3.8.5
-
-# HTTP client and utilities
 httpx==0.28.1
-numpy==2.2.1
-psutil==7.0.0
 
-# Database (optional - for analytics)
-supabase==2.17.0
+# Audio processing (needed for LiveKit)
+av>=14.0.0
+
+# ML dependencies (for Silero TTS if needed)
+onnxruntime>=1.18.0
+numpy>=1.26.0

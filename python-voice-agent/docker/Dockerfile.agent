@@ -1,0 +1,33 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install system dependencies needed for voice processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ffmpeg \
+    libgomp1 \
+    portaudio19-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy and install Python dependencies
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy entire project
+COPY . .
+
+# Set working directory to agent
+WORKDIR /app/agent
+
+# Health check for Railway/Render
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
+    CMD pgrep -f "python.*main.py" || exit 1
+
+# Run the voice agent
+CMD ["python", "main.py"]
