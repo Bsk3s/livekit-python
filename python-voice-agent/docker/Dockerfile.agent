@@ -22,12 +22,9 @@ RUN pip install --upgrade pip && \
 # Copy entire project
 COPY . .
 
-# Set working directory to agent
-WORKDIR /app/agent
-
 # Health check for Railway/Render
 HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
-    CMD pgrep -f "python.*main.py" || exit 1
+    CMD pgrep -f "python.*agent/main.py" || exit 1
 
-# Run the voice agent
-CMD ["python", "main.py"]
+# Run the voice agent from the agent directory
+CMD ["python", "agent/main.py"]

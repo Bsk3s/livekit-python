@@ -86,8 +86,8 @@ class VoiceAgentSystem:
         # Prepare environment for agent
         env = os.environ.copy()
         
-        # Use the railway agent (which is production-ready)
-        agent_cmd = [sys.executable, "railway_agent.py", "dev"]
+        # Use our new agent (which is production-ready)
+        agent_cmd = [sys.executable, "agent/main.py"]
         
         try:
             self.agent_process = subprocess.Popen(
